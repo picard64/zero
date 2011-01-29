@@ -214,7 +214,7 @@ pAuraHandler AuraHandler[TOTAL_AURAS]=
     &Aura::HandleNoImmediateEffect,                         //160 SPELL_AURA_MOD_AOE_AVOIDANCE                 implemented in Unit::MagicSpellHitResult
     &Aura::HandleNoImmediateEffect,                         //161 SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT
     &Aura::HandleAuraPowerBurn,                             //162 SPELL_AURA_POWER_BURN_MANA
-    &Aura::HandleNoImmediateEffect,                         //163 SPELL_AURA_MOD_CRIT_DAMAGE_BONUS_MELEE
+    &Aura::HandleUnused,                                    //163 SPELL_AURA_MOD_CRIT_DAMAGE_BONUS
     &Aura::HandleUnused,                                    //164 useless, only one test spell
     &Aura::HandleNoImmediateEffect,                         //165 SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS implemented in Unit::MeleeDamageBonus
     &Aura::HandleAuraModAttackPowerPercent,                 //166 SPELL_AURA_MOD_ATTACK_POWER_PCT
@@ -1162,9 +1162,9 @@ void Aura::HandleAddModifier(bool apply, bool Real)
         // Add custom charges for some mod aura
         switch (m_spellProto->Id)
         {
-            case 17941:    // Shadow Trance
-            case 22008:    // Netherwind Focus
-            case 34936:    // Backlash
+            case 17941:                                     // Shadow Trance
+            case 22008:                                     // Netherwind Focus
+            case 34936:                                     // Backlash
                 SetAuraCharges(1);
                 break;
         }
@@ -4963,7 +4963,7 @@ void Aura::PeriodicTick()
             uint32 heal = pCaster->SpellHealingBonus(pCaster, spellProto, uint32(new_damage * multiplier), DOT, GetStackAmount());
 
             int32 gain = pCaster->DealHeal(pCaster, heal, spellProto);
-            pCaster->getHostileRefManager().threatAssist(pCaster, gain * 0.5f, spellProto);
+            pCaster->getHostileRefManager().threatAssist(pCaster, gain * 0.5f * sSpellMgr.GetSpellThreatMultiplier(spellProto), spellProto);
             break;
         }
         case SPELL_AURA_PERIODIC_HEAL:
@@ -5004,7 +5004,7 @@ void Aura::PeriodicTick()
             //Do check before because m_modifier.auraName can be invalidate by DealDamage.
             bool procSpell = (m_modifier.m_auraname == SPELL_AURA_PERIODIC_HEAL && m_target != pCaster);
 
-            target->getHostileRefManager().threatAssist(pCaster, float(gain) * 0.5f, spellProto);
+            target->getHostileRefManager().threatAssist(pCaster, float(gain) * 0.5f * sSpellMgr.GetSpellThreatMultiplier(spellProto), spellProto);
 
             // heal for caster damage
             if(target != pCaster && spellProto->SpellVisual==163)
@@ -5122,7 +5122,7 @@ void Aura::PeriodicTick()
             int32 gain = target->ModifyPower(power,pdamage);
 
             if(Unit* pCaster = GetCaster())
-                target->getHostileRefManager().threatAssist(pCaster, float(gain) * 0.5f, spellProto);
+                target->getHostileRefManager().threatAssist(pCaster, float(gain) * 0.5f * sSpellMgr.GetSpellThreatMultiplier(spellProto), spellProto);
             break;
         }
         case SPELL_AURA_OBS_MOD_MANA:
@@ -5148,7 +5148,7 @@ void Aura::PeriodicTick()
             int32 gain = target->ModifyPower(POWER_MANA, pdamage);
 
             if(Unit* pCaster = GetCaster())
-                target->getHostileRefManager().threatAssist(pCaster, float(gain) * 0.5f, spellProto);
+                target->getHostileRefManager().threatAssist(pCaster, float(gain) * 0.5f * sSpellMgr.GetSpellThreatMultiplier(spellProto), spellProto);
             break;
         }
         case SPELL_AURA_POWER_BURN_MANA:
@@ -5200,7 +5200,7 @@ void Aura::PeriodicTick()
         {
             int32 gain = target->ModifyHealth(m_modifier.m_amount);
             if (Unit *caster = GetCaster())
-                target->getHostileRefManager().threatAssist(caster, float(gain) * 0.5f, spellProto);
+                target->getHostileRefManager().threatAssist(caster, float(gain) * 0.5f  * sSpellMgr.GetSpellThreatMultiplier(spellProto), spellProto);
             break;
         }
         case SPELL_AURA_MOD_POWER_REGEN:

@@ -966,7 +966,15 @@ void ObjectMgr::LoadCreatures()
         if(cInfo->flags_extra & CREATURE_FLAG_EXTRA_INSTANCE_BIND)
         {
             if(!mapEntry || !mapEntry->IsDungeon())
-                sLog.outErrorDb("Table `creature` have creature (GUID: %u Entry: %u) with `creature_template`.`flags_extra` including CREATURE_FLAG_EXTRA_INSTANCE_BIND but creature are not in instance.",guid,data.id);
+                sLog.outErrorDb("Table `creature` have creature (GUID: %u Entry: %u) with `creature_template`.`flags_extra` including CREATURE_FLAG_EXTRA_INSTANCE_BIND (%u) but creature are not in instance.",
+                    guid, data.id, CREATURE_FLAG_EXTRA_INSTANCE_BIND);
+        }
+
+        if(cInfo->flags_extra & CREATURE_FLAG_EXTRA_AGGRO_ZONE)
+        {
+            if(!mapEntry || !mapEntry->IsDungeon())
+                sLog.outErrorDb("Table `creature` have creature (GUID: %u Entry: %u) with `creature_template`.`flags_extra` including CREATURE_FLAG_EXTRA_AGGRO_ZONE (%u) but creature are not in instance.",
+                    guid, data.id, CREATURE_FLAG_EXTRA_AGGRO_ZONE);
         }
 
         if(data.curmana < cInfo->minmana)
@@ -5056,8 +5064,10 @@ void ObjectMgr::PackGroupIds()
 
             if (id == 0)
             {
+                CharacterDatabase.BeginTransaction();
                 CharacterDatabase.PExecute("DELETE FROM groups WHERE groupId = '%u'", id);
                 CharacterDatabase.PExecute("DELETE FROM group_member WHERE groupId = '%u'", id);
+                CharacterDatabase.CommitTransaction();
                 continue;
             }
 
@@ -5077,8 +5087,10 @@ void ObjectMgr::PackGroupIds()
         if (*i != groupId)
         {
             // remap group id
+            CharacterDatabase.BeginTransaction();
             CharacterDatabase.PExecute("UPDATE groups SET groupId = '%u' WHERE groupId = '%u'", groupId, *i);
             CharacterDatabase.PExecute("UPDATE group_member SET groupId = '%u' WHERE groupId = '%u'", groupId, *i);
+            CharacterDatabase.CommitTransaction();
         }
 
         ++groupId;
@@ -5115,9 +5127,11 @@ void ObjectMgr::SetHighestGuids()
     }
 
     // Cleanup other tables from nonexistent guids (>=m_hiItemGuid)
+    CharacterDatabase.BeginTransaction();
     CharacterDatabase.PExecute("DELETE FROM character_inventory WHERE item >= '%u'", m_ItemGuids.GetNextAfterMaxUsed());
     CharacterDatabase.PExecute("DELETE FROM mail_items WHERE item_guid >= '%u'", m_ItemGuids.GetNextAfterMaxUsed());
     CharacterDatabase.PExecute("DELETE FROM auction WHERE itemguid >= '%u'", m_ItemGuids.GetNextAfterMaxUsed());
+    CharacterDatabase.CommitTransaction();
 
     result = WorldDatabase.Query("SELECT MAX(guid) FROM gameobject" );
     if( result )
@@ -6062,9 +6076,12 @@ void ObjectMgr::LoadWeatherZoneChances()
 void ObjectMgr::SaveCreatureRespawnTime(uint32 loguid, uint32 instance, time_t t)
 {
     mCreatureRespawnTimes[MAKE_PAIR64(loguid,instance)] = t;
+
+    CharacterDatabase.BeginTransaction();
     CharacterDatabase.PExecute("DELETE FROM creature_respawn WHERE guid = '%u' AND instance = '%u'", loguid, instance);
     if(t)
         CharacterDatabase.PExecute("INSERT INTO creature_respawn VALUES ( '%u', '" UI64FMTD "', '%u' )", loguid, uint64(t), instance);
+    CharacterDatabase.CommitTransaction();
 }
 
 void ObjectMgr::DeleteCreatureData(uint32 guid)
@@ -6080,9 +6097,12 @@ void ObjectMgr::DeleteCreatureData(uint32 guid)
 void ObjectMgr::SaveGORespawnTime(uint32 loguid, uint32 instance, time_t t)
 {
     mGORespawnTimes[MAKE_PAIR64(loguid,instance)] = t;
+
+    CharacterDatabase.BeginTransaction();
     CharacterDatabase.PExecute("DELETE FROM gameobject_respawn WHERE guid = '%u' AND instance = '%u'", loguid, instance);
     if(t)
         CharacterDatabase.PExecute("INSERT INTO gameobject_respawn VALUES ( '%u', '" UI64FMTD "', '%u' )", loguid, uint64(t), instance);
+    CharacterDatabase.CommitTransaction();
 }
 
 void ObjectMgr::DeleteRespawnTimeForInstance(uint32 instance)
@@ -6107,8 +6127,10 @@ void ObjectMgr::DeleteRespawnTimeForInstance(uint32 instance)
             mCreatureRespawnTimes.erase(itr);
     }
 
+    CharacterDatabase.BeginTransaction();
     CharacterDatabase.PExecute("DELETE FROM creature_respawn WHERE instance = '%u'", instance);
     CharacterDatabase.PExecute("DELETE FROM gameobject_respawn WHERE instance = '%u'", instance);
+    CharacterDatabase.CommitTransaction();
 }
 
 void ObjectMgr::DeleteGOData(uint32 guid)
@@ -8055,7 +8077,7 @@ bool FindCreatureData::operator()( CreatureDataPair const& dataPair )
         i_mapDist = new_dist;
     }
 
-    // skip not spawned (in any state), 
+    // skip not spawned (in any state),
     uint16 pool_id = sPoolMgr.IsPartOfAPool<Creature>(dataPair.first);
     if (pool_id && !sPoolMgr.IsSpawnedObject<Creature>(dataPair.first))
         return false;

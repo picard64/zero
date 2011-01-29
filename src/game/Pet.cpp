@@ -404,6 +404,8 @@ void Pet::SavePetToDB(PetSaveMode mode)
         if (mode != PET_SAVE_AS_CURRENT)
             RemoveAllAuras();
 
+        //save pet's data as one single transaction
+        CharacterDatabase.BeginTransaction();
         _SaveSpells();
         _SaveSpellCooldowns();
         _SaveAuras();
@@ -415,7 +417,6 @@ void Pet::SavePetToDB(PetSaveMode mode)
         uint32 ownerLow = GetOwnerGuid().GetCounter();
         std::string name = m_name;
         CharacterDatabase.escape_string(name);
-        CharacterDatabase.BeginTransaction();
         // remove current data
         CharacterDatabase.PExecute("DELETE FROM character_pet WHERE owner = '%u' AND id = '%u'", ownerLow, m_charmInfo->GetPetNumber());
 
@@ -482,12 +483,18 @@ void Pet::SavePetToDB(PetSaveMode mode)
     }
 }
 
-void Pet::DeleteFromDB(uint32 guidlow)
+void Pet::DeleteFromDB(uint32 guidlow, bool separate_transaction)
 {
+    if(separate_transaction)
+        CharacterDatabase.BeginTransaction();
+
     CharacterDatabase.PExecute("DELETE FROM character_pet WHERE id = '%u'", guidlow);
     CharacterDatabase.PExecute("DELETE FROM pet_aura WHERE guid = '%u'", guidlow);
     CharacterDatabase.PExecute("DELETE FROM pet_spell WHERE guid = '%u'", guidlow);
     CharacterDatabase.PExecute("DELETE FROM pet_spell_cooldown WHERE guid = '%u'", guidlow);
+
+    if(separate_transaction)
+        CharacterDatabase.CommitTransaction();
 }
 
 void Pet::SetDeathState(DeathState s)                       // overwrite virtual Creature::SetDeathState and Unit::SetDeathState
@@ -953,7 +960,7 @@ bool Pet::CreateBaseAtCreature(Creature* creature)
     SetUInt32Value(UNIT_FIELD_PET_NAME_TIMESTAMP, 0);
     SetUInt32Value(UNIT_FIELD_PETEXPERIENCE, 0);
     SetUInt32Value(UNIT_FIELD_PETNEXTLEVELEXP, sObjectMgr.GetXPForPetLevel(creature->getLevel()));
-    SetUInt32Value(UNIT_NPC_FLAGS, 0);
+    SetUInt32Value(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_NONE);
 
     if(CreatureFamilyEntry const* cFamily = sCreatureFamilyStore.LookupEntry(cinfo->family))
         SetName(cFamily->Name[sWorld.GetDefaultDbcLocale()]);
@@ -1766,6 +1773,8 @@ bool Pet::IsPermanentPetFor(Player* owner)
         case SUMMON_PET:
             switch(owner->getClass())
             {
+                // oddly enough, Mage's Water Elemental is still treated as temporary pet with Glyph of Eternal Water
+                // i.e. does not unsummon at mounting, gets dismissed at teleport etc.
                 case CLASS_WARLOCK:
                     return GetCreatureInfo()->type == CREATURE_TYPE_DEMON;
                 default:

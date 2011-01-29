@@ -1748,6 +1748,9 @@ bool ChatHandler::HandleNpcSetMoveTypeCommand(char* args)
 
     MovementGeneratorType move_type;
     char* type_str = ExtractLiteralArg(&args);
+    if (!type_str)
+        return false;
+
     if (strncmp(type_str, "stay", strlen(type_str)) == 0)
         move_type = IDLE_MOTION_TYPE;
     else if (strncmp(type_str, "random", strlen(type_str)) == 0)
@@ -2428,7 +2431,7 @@ bool ChatHandler::HandleTicketCommand(char* args)
             if (num == 0)
                 return false;
 
-            // mgr numbering tickets start from 0 
+            // mgr numbering tickets start from 0
             ticket = sTicketMgr.GetGMTicketByOrderPos(num-1);
 
             if (!ticket)
@@ -2475,7 +2478,7 @@ bool ChatHandler::HandleTicketCommand(char* args)
         if (num == 0)
             return false;
 
-        // mgr numbering tickets start from 0 
+        // mgr numbering tickets start from 0
         GMTicket* ticket = sTicketMgr.GetGMTicketByOrderPos(num-1);
         if (!ticket)
         {
@@ -2530,7 +2533,7 @@ bool ChatHandler::HandleDelTicketCommand(char *args)
         if (num ==0)
             return false;
 
-        // mgr numbering tickets start from 0 
+        // mgr numbering tickets start from 0
         GMTicket* ticket = sTicketMgr.GetGMTicketByOrderPos(num-1);
 
         if (!ticket)

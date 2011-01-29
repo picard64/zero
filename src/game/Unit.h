@@ -157,7 +157,7 @@ enum UnitBytes1_Flags
     UNIT_BYTE1_FLAG_ALL          = 0xFF
 };
 
-// low byte ( 0 from 0..3 ) of UNIT_FIELD_BYTES_2
+// byte value (UNIT_FIELD_BYTES_2,0)
 enum SheathState
 {
     SHEATH_STATE_UNARMED  = 0,                              // non prepared weapon
@@ -167,7 +167,7 @@ enum SheathState
 
 #define MAX_SHEATH_STATE    3
 
-// byte (1 from 0..3) of UNIT_FIELD_BYTES_2
+// byte flags value (UNIT_FIELD_BYTES_2,1)
 enum UnitBytes2_Flags
 {
     UNIT_BYTE2_FLAG_UNK0        = 0x01,
@@ -1245,8 +1245,6 @@ class MANGOS_DLL_SPEC Unit : public WorldObject
         void CastCustomSpell(Unit* Victim,SpellEntry const *spellInfo, int32 const* bp0, int32 const* bp1, int32 const* bp2, bool triggered, Item *castItem= NULL, Aura* triggeredByAura = NULL, ObjectGuid originalCaster = ObjectGuid(), SpellEntry const* triggeredBy = NULL);
         void CastSpell(float x, float y, float z, uint32 spellId, bool triggered, Item *castItem = NULL, Aura* triggeredByAura = NULL, ObjectGuid originalCaster = ObjectGuid(), SpellEntry const* triggeredBy = NULL);
         void CastSpell(float x, float y, float z, SpellEntry const *spellInfo, bool triggered, Item *castItem = NULL, Aura* triggeredByAura = NULL, ObjectGuid originalCaster = ObjectGuid(), SpellEntry const* triggeredBy = NULL);
-
-        bool IsDamageToThreatSpell(SpellEntry const * spellInfo) const;
 
         void DeMorph();
 

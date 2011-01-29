@@ -421,7 +421,7 @@ void GameObject::Update(uint32 /*p_time*/)
             m_respawnTime = m_spawnedByDefault ? time(NULL) + m_respawnDelayTime : 0;
 
             // if option not set then object will be saved at grid unload
-            if (sWorld.getConfig(CONFIG_BOOL_SAVE_RESPAWN_TIME_IMMEDIATLY))
+            if (sWorld.getConfig(CONFIG_BOOL_SAVE_RESPAWN_TIME_IMMEDIATELY))
                 SaveRespawnTime();
 
             // if part of pool, let pool system schedule new spawn instead of just scheduling respawn
@@ -455,7 +455,7 @@ void GameObject::AddUniqueUse(Player* player)
         m_firstUser = player->GetObjectGuid();
 
     m_UniqueUsers.insert(player->GetObjectGuid());
-    
+
 }
 
 void GameObject::Delete()

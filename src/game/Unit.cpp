@@ -351,7 +351,6 @@ bool Unit::haveOffhandWeapon() const
 
 void Unit::SendMonsterMove(float NewPosX, float NewPosY, float NewPosZ, SplineType type, SplineFlags flags, uint32 Time, Player* player, ...)
 {
-
     va_list vargs;
     va_start(vargs,player);
 
@@ -386,7 +385,7 @@ void Unit::SendMonsterMove(float NewPosX, float NewPosY, float NewPosZ, SplineTy
         case SPLINETYPE_FACINGTARGET:
             data << uint64(va_arg(vargs,uint64));
             break;
-        case SPLINETYPE_FACINGANGLE:                        // not used currently
+        case SPLINETYPE_FACINGANGLE:
             data << float(va_arg(vargs,double));            // facing angle
             break;
     }
@@ -898,10 +897,8 @@ uint32 Unit::DealDamage(Unit *pVictim, uint32 damage, CleanDamage const* cleanDa
         }
         if (pVictim->GetTypeId() != TYPEID_PLAYER)
         {
-            if(spellProto && IsDamageToThreatSpell(spellProto))
-                pVictim->AddThreat(this, float(damage*2), (cleanDamage && cleanDamage->hitOutCome == MELEE_HIT_CRIT), damageSchoolMask, spellProto);
-            else
-                pVictim->AddThreat(this, float(damage), (cleanDamage && cleanDamage->hitOutCome == MELEE_HIT_CRIT), damageSchoolMask, spellProto);
+            float threat = damage * sSpellMgr.GetSpellThreatMultiplier(spellProto);
+            pVictim->AddThreat(this, threat, (cleanDamage && cleanDamage->hitOutCome == MELEE_HIT_CRIT), damageSchoolMask, spellProto);
         }
         else                                                // victim is a player
         {
@@ -1419,9 +1416,6 @@ void Unit::CalculateMeleeDamage(Unit *pVictim, uint32 damage, CalcDamageInfo *da
             // Crit bonus calc
             damageInfo->damage += damageInfo->damage;
             int32 mod=0;
-            // Apply SPELL_AURA_MOD_ATTACKER_RANGED_CRIT_DAMAGE or SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_DAMAGE
-            if(damageInfo->attackType != RANGED_ATTACK)
-                mod += GetTotalAuraModifier(SPELL_AURA_MOD_CRIT_DAMAGE_BONUS_MELEE);
 
             uint32 crTypeMask = damageInfo->target->GetCreatureTypeMask();
 
@@ -1953,7 +1947,7 @@ void Unit::CalcAbsorbResist(Unit *pVictim,SpellSchoolMask schoolMask, DamageEffe
 
 void Unit::AttackerStateUpdate (Unit *pVictim, WeaponAttackType attType, bool extra )
 {
-    if (hasUnitState(UNIT_STAT_CONFUSED | UNIT_STAT_STUNNED | UNIT_STAT_FLEEING | UNIT_STAT_DIED) || HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED) )
+    if(hasUnitState(UNIT_STAT_CAN_NOT_REACT) || HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED) )
         return;
 
     if (!pVictim->isAlive())
@@ -3674,8 +3668,13 @@ void Unit::RemoveAurasDueToSpellBySteal(uint32 spellId, uint64 casterGUID, Unit 
             // max duration 2 minutes (in msecs)
             int32 dur = aur->GetAuraDuration();
             int32 max_dur = 2*MINUTE*IN_MILLISECONDS;
-            new_aur->SetAuraMaxDuration( max_dur > dur ? dur : max_dur );
-            new_aur->SetAuraDuration( max_dur > dur ? dur : max_dur );
+            int32 new_max_dur = max_dur > dur ? dur : max_dur;
+            new_aur->SetAuraMaxDuration( new_max_dur );
+            new_aur->SetAuraDuration( new_max_dur );
+
+            // set periodic to do at least one tick (for case when original aura has been at last tick preparing)
+            int32 periodic = aur->GetModifier()->periodictime;
+            new_aur->GetModifier()->periodictime = periodic < new_max_dur ? periodic : new_max_dur;
 
             // Unregister _before_ adding to stealer
             aur->UnregisterSingleCastAura();
@@ -5192,7 +5191,7 @@ bool Unit::HandleProcTriggerSpell(Unit *pVictim, uint32 damage, Aura* triggeredB
     if (m_extraAttacks && IsSpellHaveEffect(triggerEntry, SPELL_EFFECT_ADD_EXTRA_ATTACKS))
         return false;
 
-    // Costum basepoints/target for exist spell
+    // Custom basepoints/target for exist spell
     // dummy basepoints or other customs
     switch(trigger_spell_id)
     {
@@ -6422,14 +6421,9 @@ uint32 Unit::SpellCriticalDamageBonus(SpellEntry const *spellProto, uint32 damag
     if(!pVictim)
         return damage += crit_bonus;
 
-    int32 critPctDamageMod = 0;
-    if(spellProto->DmgClass >= SPELL_DAMAGE_CLASS_MELEE)
-    {
-        if(GetWeaponAttackType(spellProto) != RANGED_ATTACK)
-            critPctDamageMod += GetTotalAuraModifier(SPELL_AURA_MOD_CRIT_DAMAGE_BONUS_MELEE);
-    }
     uint32 creatureTypeMask = pVictim->GetCreatureTypeMask();
-    critPctDamageMod += GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_CRIT_PERCENT_VERSUS, creatureTypeMask);
+
+    int32 critPctDamageMod = GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_CRIT_PERCENT_VERSUS, creatureTypeMask);
 
     if(critPctDamageMod!=0)
         crit_bonus = int32(crit_bonus * float((100.0f + critPctDamageMod)/100.0f));
@@ -6753,22 +6747,6 @@ bool Unit::IsImmuneToSpellEffect(SpellEntry const* spellInfo, SpellEffectIndex i
     return false;
 }
 
-bool Unit::IsDamageToThreatSpell(SpellEntry const * spellInfo) const
-{
-    if (!spellInfo)
-        return false;
-
-    uint32 family = spellInfo->SpellFamilyName;
-    uint64 flags = spellInfo->SpellFamilyFlags;
-
-    if ((family == 5 && flags == 256) ||                    //Searing Pain
-        (family == 6 && flags == 8192) ||                   //Mind Blast
-        (family == 11 && flags == 1048576))                 //Earth Shock
-        return true;
-
-    return false;
-}
-
 uint32 Unit::MeleeDamageBonus(Unit *pVictim, uint32 pdamage,WeaponAttackType attType, SpellEntry const *spellProto, DamageEffectType damagetype, uint32 stack)
 {
     if (!pVictim)
@@ -6779,7 +6757,7 @@ uint32 Unit::MeleeDamageBonus(Unit *pVictim, uint32 pdamage,WeaponAttackType att
 
     // differentiate for weapon damage based spells
     bool isWeaponDamageBasedSpell = !(spellProto && (damagetype == DOT || IsSpellHaveEffect(spellProto, SPELL_EFFECT_SCHOOL_DAMAGE)));
-    Item*  pWeapon          = GetTypeId() == TYPEID_PLAYER ? ((Player*)this)->GetWeaponForAttack(attType) : NULL;
+    Item*  pWeapon          = GetTypeId() == TYPEID_PLAYER ? ((Player*)this)->GetWeaponForAttack(attType,true,false) : NULL;
     uint32 creatureTypeMask = pVictim->GetCreatureTypeMask();
     uint32 schoolMask       = spellProto ? GetSpellSchoolMask(spellProto) : GetMeleeDamageSchoolMask();
     uint32 mechanicMask     = spellProto ? GetAllSpellMechanicMask(spellProto) : 0;
@@ -7129,11 +7107,17 @@ void Unit::SetInCombatState(bool PvP, Unit* enemy)
         // should probably be removed for the attacked (+ it's party/group) only, not global
         RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_OOC_NOT_ATTACKABLE);
 
-        if (((Creature*)this)->AI())
-            ((Creature*)this)->AI()->EnterCombat(enemy);
+        Creature* pCreature = (Creature*)this;
+
+        if (pCreature->AI())
+            pCreature->AI()->EnterCombat(enemy);
+
+        // Some bosses are set into combat with zone
+        if (GetMap()->IsDungeon() && (pCreature->GetCreatureInfo()->flags_extra & CREATURE_FLAG_EXTRA_AGGRO_ZONE) && enemy && enemy->IsControlledByPlayer())
+            pCreature->SetInCombatWithZone();
 
         if (InstanceData* mapInstance = GetInstanceData())
-            mapInstance->OnCreatureEnterCombat((Creature*)this);
+            mapInstance->OnCreatureEnterCombat(pCreature);
     }
 }
 
@@ -7851,6 +7835,7 @@ void Unit::SetDeathState(DeathState s)
 ########       AGGRO SYSTEM       ########
 ########                          ########
 ########################################*/
+
 bool Unit::CanHaveThreatList() const
 {
     // only creatures can have threat list
@@ -7898,7 +7883,7 @@ float Unit::ApplyTotalThreatModifier(float threat, SpellSchoolMask schoolMask)
 void Unit::AddThreat(Unit* pVictim, float threat /*= 0.0f*/, bool crit /*= false*/, SpellSchoolMask schoolMask /*= SPELL_SCHOOL_MASK_NONE*/, SpellEntry const *threatSpell /*= NULL*/)
 {
     // Only mobs can manage threat lists
-    if(CanHaveThreatList())
+    if (CanHaveThreatList())
         m_ThreatManager.addThreat(pVictim, threat, crit, schoolMask, threatSpell);
 }
 
@@ -7913,19 +7898,21 @@ void Unit::DeleteThreatList()
 
 void Unit::TauntApply(Unit* taunter)
 {
-    MANGOS_ASSERT(GetTypeId()== TYPEID_UNIT);
+    MANGOS_ASSERT(GetTypeId() == TYPEID_UNIT);
 
-    if(!taunter || (taunter->GetTypeId() == TYPEID_PLAYER && ((Player*)taunter)->isGameMaster()))
+    if (!taunter || (taunter->GetTypeId() == TYPEID_PLAYER && ((Player*)taunter)->isGameMaster()))
         return;
 
-    if(!CanHaveThreatList())
+    if (!CanHaveThreatList())
         return;
 
     Unit *target = getVictim();
-    if(target && target == taunter)
+
+    if (target && target == taunter)
         return;
 
     SetInFront(taunter);
+
     if (((Creature*)this)->AI())
         ((Creature*)this)->AI()->AttackStart(taunter);
 
@@ -7936,21 +7923,22 @@ void Unit::TauntApply(Unit* taunter)
 
 void Unit::TauntFadeOut(Unit *taunter)
 {
-    MANGOS_ASSERT(GetTypeId()== TYPEID_UNIT);
+    MANGOS_ASSERT(GetTypeId() == TYPEID_UNIT);
 
-    if(!taunter || (taunter->GetTypeId() == TYPEID_PLAYER && ((Player*)taunter)->isGameMaster()))
+    if (!taunter || (taunter->GetTypeId() == TYPEID_PLAYER && ((Player*)taunter)->isGameMaster()))
         return;
 
-    if(!CanHaveThreatList())
+    if (!CanHaveThreatList())
         return;
 
     Unit *target = getVictim();
-    if(!target || target != taunter)
+
+    if (!target || target != taunter)
         return;
 
-    if(m_ThreatManager.isThreatListEmpty())
+    if (m_ThreatManager.isThreatListEmpty())
     {
-        if(((Creature*)this)->AI())
+        if (((Creature*)this)->AI())
             ((Creature*)this)->AI()->EnterEvadeMode();
 
         if (InstanceData* mapInstance = GetInstanceData())
@@ -7965,6 +7953,7 @@ void Unit::TauntFadeOut(Unit *taunter)
     if (target && target != taunter)
     {
         SetInFront(target);
+
         if (((Creature*)this)->AI())
             ((Creature*)this)->AI()->AttackStart(target);
     }
@@ -7978,10 +7967,11 @@ bool Unit::SelectHostileTarget()
     //next-victim-selection algorithm and evade mode are called
     //threat list sorting etc.
 
-    MANGOS_ASSERT(GetTypeId()== TYPEID_UNIT);
+    MANGOS_ASSERT(GetTypeId() == TYPEID_UNIT);
 
     if (!this->isAlive())
         return false;
+
     //This function only useful once AI has been initialized
     if (!((Creature*)this)->AI())
         return false;
@@ -7990,12 +7980,12 @@ bool Unit::SelectHostileTarget()
 
     // First checking if we have some taunt on us
     const AuraList& tauntAuras = GetAurasByType(SPELL_AURA_MOD_TAUNT);
-    if ( !tauntAuras.empty() )
+    if (!tauntAuras.empty())
     {
         Unit* caster;
 
         // The last taunt aura caster is alive an we are happy to attack him
-        if ( (caster = tauntAuras.back()->GetCaster()) && caster->isAlive() )
+        if ((caster = tauntAuras.back()->GetCaster()) && caster->isAlive())
             return true;
         else if (tauntAuras.size() > 1)
         {
@@ -8007,8 +7997,8 @@ bool Unit::SelectHostileTarget()
             do
             {
                 --aura;
-                if ( (caster = (*aura)->GetCaster()) &&
-                     caster->IsInMap(this) && caster->isTargetableForAttack() && caster->isInAccessablePlaceFor((Creature*)this) )
+                if ((caster = (*aura)->GetCaster()) && caster->IsInMap(this) &&
+                    caster->isTargetableForAttack() && caster->isInAccessablePlaceFor((Creature*)this))
                 {
                     target = caster;
                     break;
@@ -8017,8 +8007,8 @@ bool Unit::SelectHostileTarget()
         }
     }
 
-    if ( !target && !m_ThreatManager.isThreatListEmpty() )
-        // No taunt aura or taunt aura caster is dead standart target selection
+    // No taunt aura or taunt aura caster is dead, standard target selection
+    if (!target && !m_ThreatManager.isThreatListEmpty())
         target = m_ThreatManager.getHostileTarget();
 
     if (target)
@@ -8032,7 +8022,7 @@ bool Unit::SelectHostileTarget()
     }
 
     // no target but something prevent go to evade mode
-    if( !isInCombat() || HasAuraType(SPELL_AURA_MOD_TAUNT) )
+    if (!isInCombat() || HasAuraType(SPELL_AURA_MOD_TAUNT))
         return false;
 
     // last case when creature don't must go to evade mode:
@@ -9996,7 +9986,7 @@ bool Unit::IsTriggeredAtSpellProcEvent(Unit *pVictim, Aura* aura, SpellEntry con
     }
     // Aura added by spell can`t trogger from self (prevent drop charges/do triggers)
     // But except periodic triggers (can triggered from self)
-    if(procSpell && procSpell->Id == spellProto->Id && !(spellProto->procFlags&PROC_FLAG_ON_TAKE_PERIODIC))
+    if(procSpell && procSpell->Id == spellProto->Id && !(spellProto->procFlags & PROC_FLAG_ON_TAKE_PERIODIC))
         return false;
 
     // Check if current equipment allows aura to proc

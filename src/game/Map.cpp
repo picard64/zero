@@ -377,7 +377,6 @@ Map::EnsureGridLoadedAtEnter(const Cell &cell, Player *player)
 
         if (player)
         {
-            player->SendDelayResponse(MAX_GRID_LOAD_TIME);
             DEBUG_FILTER_LOG(LOG_FILTER_PLAYER_MOVES, "Player %s enter cell[%u,%u] triggers of loading grid[%u,%u] on map %u", player->GetName(), cell.CellX(), cell.CellY(), cell.GridX(), cell.GridY(), i_id);
         }
         else
@@ -407,7 +406,7 @@ bool Map::EnsureGridLoaded(const Cell &cell)
         //otherwise there is a possibility of infinity chain (grid loading will be called many times for the same grid)
         //possible scenario:
         //active object A(loaded with loader.LoadN call and added to the  map)
-        //summons some active object B, while B added to map grid loading called again and so on.. 
+        //summons some active object B, while B added to map grid loading called again and so on..
         setGridObjectDataLoaded(true,cell.GridX(), cell.GridY());
         ObjectGridLoader loader(*grid, this, cell);
         loader.LoadN();
@@ -774,7 +773,7 @@ Map::Remove(T *obj, bool remove)
     if( remove )
     {
         // if option set then object already saved at this moment
-        if(!sWorld.getConfig(CONFIG_BOOL_SAVE_RESPAWN_TIME_IMMEDIATLY))
+        if(!sWorld.getConfig(CONFIG_BOOL_SAVE_RESPAWN_TIME_IMMEDIATELY))
             obj->SaveRespawnTime();
 
         // Note: In case resurrectable corpse and pet its removed from global lists in own destructor
@@ -1028,7 +1027,7 @@ GridMap::GridMap()
     m_gridArea = 0;
     m_area_map = NULL;
     // Height level data
-    m_gridHeight = INVALID_HEIGHT;
+    m_gridHeight = INVALID_HEIGHT_VALUE;
     m_gridGetHeight = &GridMap::getHeightFromFlat;
     m_V9 = NULL;
     m_V8 = NULL;
@@ -1038,7 +1037,7 @@ GridMap::GridMap()
     m_liquid_offY   = 0;
     m_liquid_width  = 0;
     m_liquid_height = 0;
-    m_liquidLevel = INVALID_HEIGHT;
+    m_liquidLevel = INVALID_HEIGHT_VALUE;
     m_liquid_type = NULL;
     m_liquid_map  = NULL;
 }
@@ -1439,9 +1438,9 @@ float  GridMap::getLiquidLevel(float x, float y)
     int cy_int = ((int)y & (MAP_RESOLUTION-1)) - m_liquid_offX;
 
     if (cx_int < 0 || cx_int >=m_liquid_height)
-        return INVALID_HEIGHT;
+        return INVALID_HEIGHT_VALUE;
     if (cy_int < 0 || cy_int >=m_liquid_width )
-        return INVALID_HEIGHT;
+        return INVALID_HEIGHT_VALUE;
 
     return m_liquid_map[cx_int*m_liquid_width + cy_int];
 }
