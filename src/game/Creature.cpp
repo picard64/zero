@@ -1376,7 +1376,7 @@ void Creature::SetDeathState(DeathState s)
             UpdateSpeed(MOVE_RUN, false);
         }
 
-        // return, since we promote to CORPSE_FALLING. CORPSE_FALLING is promoted to CORPSE at next update.
+        // return, since we promote to DEAD_FALLING. DEAD_FALLING is promoted to CORPSE at next update.
         if (CanFly() && FallGround())
             return;
 
@@ -1402,22 +1402,22 @@ void Creature::SetDeathState(DeathState s)
 
 bool Creature::FallGround()
 {
-    // Only if state is JUST_DIED. CORPSE_FALLING is set below and promoted to CORPSE later
+    // Only if state is JUST_DIED. DEAD_FALLING is set below and promoted to CORPSE later
     if (getDeathState() != JUST_DIED)
         return false;
 
     // use larger distance for vmap height search than in most other cases
     float tz = GetMap()->GetHeight(GetPositionX(), GetPositionY(), GetPositionZ(), true, MAX_FALL_DISTANCE);
 
-    if (tz <= INVALID_HEIGHT)
+    if (tz < INVALID_HEIGHT)
     {
         DEBUG_LOG("FallGround: creature %u at map %u (x: %f, y: %f, z: %f), not able to retrive a proper GetHeight (z: %f).",
             GetEntry(), GetMap()->GetId(), GetPositionX(), GetPositionX(), GetPositionZ(), tz);
-        return false;
     }
 
+    float Z = fabs(GetPositionZ() - tz);
     // Abort too if the ground is very near
-    if (fabs(GetPositionZ() - tz) < 0.1f)
+    if (Z < 0.1f || Z >= INVALID_HEIGHT)
         return false;
 
     Unit::SetDeathState(CORPSE_FALLING);
@@ -1425,7 +1425,7 @@ bool Creature::FallGround()
     float dz = tz - GetPositionZ();
     float distance = sqrt(dz*dz);
 
-    // default run speed * 2 explicit, not verified though but result looks proper
+    // flight speed * 2 explicit, not verified though but result looks proper
     double speed = baseMoveSpeed[MOVE_RUN] * 2;
 
     speed *= 0.001;                                         // to milliseconds

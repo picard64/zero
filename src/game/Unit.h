@@ -571,10 +571,10 @@ enum SplineFlags
     SPLINEFLAG_WALKMODE       = 0x00000100,
     SPLINEFLAG_FLYING         = 0x00000200,
     // backported flag to preserve compatibility not confirmed by data, but causes no problems
-    SPLINEFLAG_NO_SPLINE      = 0x00000400,                 // former: SPLINEFLAG_LEVITATING
+    SPLINEFLAG_NO_SPLINE      = 0x00000400,               // former: SPLINEFLAG_LEVITATING
     SPLINEFLAG_FALLING        = 0x00001000,
-    SPLINEFLAG_UNKNOWN7       = 0x02000000,                 // swimming/flying (depends on mob?)
-    SPLINEFLAG_SPLINE         = 0x00002000,                 // spline n*(float x,y,z)
+    SPLINEFLAG_UNKNOWN7       = 0x02000000,               // swimming/flying (depends on mob?)
+    SPLINEFLAG_SPLINE         = 0x00002000,               // spline n*(float x,y,z)
 };
 
 enum SplineType
@@ -1372,6 +1372,7 @@ class MANGOS_DLL_SPEC Unit : public WorldObject
         void RemoveRankAurasDueToSpell(uint32 spellId);
         bool RemoveNoStackAurasDueToAura(Aura *Aur);
         void RemoveAurasWithInterruptFlags(uint32 flags);
+        void RemoveAurasWithAttribute(uint32 flags);
         void RemoveAurasWithDispelType( DispelType type );
         void RemoveAllAuras(AuraRemoveMode mode = AURA_REMOVE_BY_DEFAULT);
         void RemoveAllAurasOnDeath();
