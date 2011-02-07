@@ -1024,7 +1024,7 @@ void Spell::DoSpellHitOnUnit(Unit *unit, const uint32 effectMask)
                 unit->RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
 
             // can cause back attack (if detected), stealth removed at Spell::cast if spell break it
-            if (!(m_spellInfo->AttributesEx & SPELL_ATTR_EX_NO_INITIAL_AGGRO) && !IsPositiveSpell(m_spellInfo->Id) &&
+            if (!(m_spellInfo->AttributesEx3 & SPELL_ATTR_EX3_NO_INITIAL_AGGRO) && !IsPositiveSpell(m_spellInfo->Id) &&
                 m_caster->isVisibleForOrDetect(unit, unit, false))
             {
                 // use speedup check to avoid re-remove after above lines
@@ -1061,7 +1061,7 @@ void Spell::DoSpellHitOnUnit(Unit *unit, const uint32 effectMask)
             if (unit->hasUnitState(UNIT_STAT_ATTACK_PLAYER))
                 realCaster->SetContestedPvP();
 
-            if (unit->isInCombat() && !(m_spellInfo->AttributesEx & SPELL_ATTR_EX_NO_INITIAL_AGGRO))
+            if (unit->isInCombat() && !(m_spellInfo->AttributesEx3 & SPELL_ATTR_EX3_NO_INITIAL_AGGRO))
             {
                 realCaster->SetInCombatState(unit->GetCombatTimer() > 0);
                 unit->getHostileRefManager().threatAssist(realCaster, 0.0f, m_spellInfo);
@@ -1898,6 +1898,14 @@ void Spell::SetTargetMap(SpellEffectIndex effIndex, uint32 targetMode, UnitList&
         {
             if (!(m_targets.m_targetMask & TARGET_FLAG_DEST_LOCATION))
             {
+                // General override, we don't want to use max spell range here.
+                // Note: 0.0 radius is also for index 36. It is possible that 36 must be defined as
+                // "at the base of", in difference to 0 which appear to be "directly in front of".
+                // TODO: some summoned will make caster be half inside summoned object. Need to fix
+                // that in the below code (nearpoint vs closepoint, etc).
+                if (m_spellInfo->EffectRadiusIndex[effIndex] == 0)
+                    radius = 0.0f;
+
                 float angle = m_caster->GetOrientation();
                 switch(targetMode)
                 {
@@ -4891,10 +4899,10 @@ SpellCastResult Spell::CheckItems()
                 uint32 itemcount = m_spellInfo->ReagentCount[i];
 
                 // if CastItem is also spell reagent
-                if( m_CastItem && m_CastItem->GetEntry() == itemid )
+                if (m_CastItem && m_CastItem->GetEntry() == itemid)
                 {
                     ItemPrototype const *proto = m_CastItem->GetProto();
-                    if(!proto)
+                    if (!proto)
                         return SPELL_FAILED_ITEM_NOT_READY;
                     for(int s = 0; s < MAX_ITEM_PROTO_SPELLS; ++s)
                     {
@@ -4907,8 +4915,9 @@ SpellCastResult Spell::CheckItems()
                         }
                     }
                 }
-                if( !p_caster->HasItemCount(itemid, itemcount) )
-                    return SPELL_FAILED_ITEM_NOT_READY;         //0x54
+
+                if (!p_caster->HasItemCount(itemid, itemcount))
+                    return SPELL_FAILED_ITEM_NOT_READY;
             }
         }
 
@@ -4916,9 +4925,9 @@ SpellCastResult Spell::CheckItems()
         uint32 totems = MAX_SPELL_TOTEMS;
         for(int i = 0; i < MAX_SPELL_TOTEMS ; ++i)
         {
-            if(m_spellInfo->Totem[i] != 0)
+            if (m_spellInfo->Totem[i] != 0)
             {
-                if( p_caster->HasItemCount(m_spellInfo->Totem[i], 1) )
+                if (p_caster->HasItemCount(m_spellInfo->Totem[i], 1))
                 {
                     totems -= 1;
                     continue;
@@ -4936,9 +4945,9 @@ SpellCastResult Spell::CheckItems()
         uint32 TotemCategory = MAX_SPELL_TOTEM_CATEGORIES;
         for(int i= 0; i < MAX_SPELL_TOTEM_CATEGORIES; ++i)
         {
-            if(m_spellInfo->TotemCategory[i] != 0)
+            if (m_spellInfo->TotemCategory[i] != 0)
             {
-                if( p_caster->HasItemTotemCategory(m_spellInfo->TotemCategory[i]) )
+                if (p_caster->HasItemTotemCategory(m_spellInfo->TotemCategory[i]))
                 {
                     TotemCategory -= 1;
                     continue;
@@ -4952,7 +4961,6 @@ SpellCastResult Spell::CheckItems()
             return SPELL_FAILED_TOTEM_CATEGORY;                 //0x7B
         */
     }
-
     // special checks for spell effects
     for(int i = 0; i < MAX_EFFECT_INDEX; ++i)
     {

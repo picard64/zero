@@ -234,7 +234,7 @@ pAuraHandler AuraHandler[TOTAL_AURAS]=
     &Aura::HandleNoImmediateEffect,                         //180 SPELL_AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS   implemented in Unit::SpellDamageBonus
     &Aura::HandleUnused,                                    //181 SPELL_AURA_MOD_FLAT_SPELL_CRIT_DAMAGE_VERSUS unused
     &Aura::HandleAuraModResistenceOfStatPercent,            //182 SPELL_AURA_MOD_RESISTANCE_OF_STAT_PERCENT
-    &Aura::HandleNoImmediateEffect,                         //183 SPELL_AURA_MOD_CRITICAL_THREAT only used in 28746, implemented in ThreatCalcHelper::calcThreat
+    &Aura::HandleNoImmediateEffect,                         //183 SPELL_AURA_MOD_CRITICAL_THREAT only used in 28746, implemented in ThreatCalcHelper::CalcThreat
     &Aura::HandleNoImmediateEffect,                         //184 SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE  implemented in Unit::RollMeleeOutcomeAgainst
     &Aura::HandleNoImmediateEffect,                         //185 SPELL_AURA_MOD_ATTACKER_RANGED_HIT_CHANCE implemented in Unit::RollMeleeOutcomeAgainst
     &Aura::HandleNoImmediateEffect,                         //186 SPELL_AURA_MOD_ATTACKER_SPELL_HIT_CHANCE  implemented in Unit::MagicSpellHitResult
@@ -802,7 +802,7 @@ void Aura::_AddAura()
             SetAura(slot, false);
             SetAuraFlag(slot, true);
             SetAuraLevel(slot,caster ? caster->getLevel() : sWorld.getConfig(CONFIG_UINT32_MAX_PLAYER_LEVEL));
-            UpdateAuraCharges();
+            UpdateAuraApplication();
 
             // update for out of range group members
             m_target->UpdateAuraForGroup(slot);
@@ -890,7 +890,9 @@ void Aura::_RemoveAura()
     SetAuraFlag(slot, false);
     SetAuraLevel(slot,caster ? caster->getLevel() : sWorld.getConfig(CONFIG_UINT32_MAX_PLAYER_LEVEL));
 
-    SetAuraApplication(slot, 0);
+    m_procCharges = 0;
+    m_stackAmount = 1;
+    UpdateAuraApplication();
 
     if (m_removeMode != AURA_REMOVE_BY_DELETE)
     {
@@ -964,13 +966,19 @@ void Aura::SetAuraLevel(uint32 slot,uint32 level)
     m_target->SetUInt32Value(UNIT_FIELD_AURALEVELS + index, val);
 }
 
-void Aura::SetAuraApplication(uint32 slot, int8 count)
+void Aura::UpdateAuraApplication()
 {
-    uint32 index    = slot / 4;
-    uint32 byte     = (slot % 4) * 8;
+    if (m_auraSlot >= MAX_AURAS)
+        return;
+
+    // field expect count-1 for proper amount show
+    uint8 count = m_procCharges > 0 ? m_procCharges*m_stackAmount : m_stackAmount;
+
+    uint32 index    = m_auraSlot / 4;
+    uint32 byte     = (m_auraSlot % 4) * 8;
     uint32 val      = m_target->GetUInt32Value(UNIT_FIELD_AURAAPPLICATIONS + index);
     val &= ~(0xFF << byte);
-    val |= ((uint8(count)) << byte);
+    val |= ((uint8(count -1)) << byte);                     // field expect count-1 for proper amount show
     m_target->SetUInt32Value(UNIT_FIELD_AURAAPPLICATIONS + index, val);
 }
 
@@ -985,8 +993,7 @@ void Aura::SetStackAmount(uint8 stackAmount)
     if (stackAmount != m_stackAmount)
     {
         m_stackAmount = stackAmount;
-        if (m_auraSlot < MAX_AURAS)
-            SetAuraApplication(m_auraSlot, m_stackAmount-1);// field expect count-1 for proper amount show
+        UpdateAuraApplication();
 
         int32 amount = m_stackAmount * caster->CalculateSpellDamage(target, m_spellProto, m_effIndex, &m_currentBasePoints);
         // Reapply if amount change
@@ -1398,9 +1405,8 @@ void Aura::TriggerSpell()
             {
                 switch(auraId)
                 {
-                    // Invisibility
-                    case 66:
-                        // Here need periodic triger reducing threat spell (or do it manually)
+                    case 66:                                // Invisibility
+                        // Here need periodic trigger reducing threat spell (or do it manually)
                         return;
                     default:
                         break;
@@ -1435,12 +1441,10 @@ void Aura::TriggerSpell()
             {
                 switch(auraId)
                 {
-                    // Cat Form
-                    // trigger_spell_id not set and unknown effect triggered in this case, ignoring for while
-                    case 768:
+                    case 768:                               // Cat Form
+                        // trigger_spell_id not set and unknown effect triggered in this case, ignoring for while
                         return;
-                    // Frenzied Regeneration
-                    case 22842:
+                    case 22842:                             // Frenzied Regeneration
                     case 22895:
                     case 22896:
                     case 26999:
@@ -1900,7 +1904,7 @@ void Aura::HandleAuraMounted(bool apply, bool Real)
     }
     else
     {
-        m_target->Unmount();
+        m_target->Unmount(true);
     }
 }
 
@@ -4976,7 +4980,7 @@ void Aura::PeriodicTick()
             Unit *pCaster = GetCaster();
             if(!pCaster)
                 return;
-
+            
             // heal for caster damage (must be alive)
             if(target != pCaster && spellProto->SpellVisual==163 && !pCaster->isAlive())
                 return;
@@ -5198,6 +5202,10 @@ void Aura::PeriodicTick()
         }
         case SPELL_AURA_MOD_REGEN:
         {
+            // don't heal target if not alive, possible death persistent effects
+            if (!target->isAlive())
+                return;
+
             int32 gain = target->ModifyHealth(m_modifier.m_amount);
             if (Unit *caster = GetCaster())
                 target->getHostileRefManager().threatAssist(caster, float(gain) * 0.5f  * sSpellMgr.GetSpellThreatMultiplier(spellProto), spellProto);
@@ -5205,6 +5213,10 @@ void Aura::PeriodicTick()
         }
         case SPELL_AURA_MOD_POWER_REGEN:
         {
+            // don't energize target if not alive, possible death persistent effects
+            if (!target->isAlive())
+                return;
+
             Powers pt = target->getPowerType();
             if(int32(pt) != m_modifier.m_miscvalue)
                 return;

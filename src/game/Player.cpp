@@ -1483,7 +1483,8 @@ bool Player::BuildEnumData( QueryResult * result, WorldPacket * p_data )
 
     *p_data << uint32(char_flags);                          // character flags
 
-    *p_data << uint8(0);                                    // unknown
+    // First login
+    *p_data << uint8(atLoginFlags & AT_LOGIN_FIRST ? 1 : 0);
 
     // Pets info
     {
@@ -1647,7 +1648,7 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         if(!GetSession()->PlayerLogout())
         {
             WorldPacket data;
-            BuildTeleportAckMsg(&data, x, y, z, orientation);
+            BuildTeleportAckMsg(data, x, y, z, orientation);
             GetSession()->SendPacket(&data);
         }
     }
@@ -5897,7 +5898,8 @@ void Player::UpdateHonor()
     //RANK (Patent)
     SetByteValue(PLAYER_BYTES_3, 3, GetHonorRankInfo().rank);
     //TODAY
-    SetUInt32Value(PLAYER_FIELD_SESSION_KILLS, (today_dishonorableKills << 16) + today_honorableKills );
+    SetUInt16Value(PLAYER_FIELD_SESSION_KILLS, 0, today_honorableKills);
+    SetUInt16Value(PLAYER_FIELD_SESSION_KILLS, 1, today_dishonorableKills);
     //YESTERDAY
     SetUInt32Value(PLAYER_FIELD_YESTERDAY_KILLS, yesterdayKills);
     SetUInt32Value(PLAYER_FIELD_YESTERDAY_CONTRIBUTION, (uint32) (yesterdayHonor > 0.0f ? yesterdayHonor : 0.0f));
@@ -13449,8 +13451,18 @@ float Player::GetFloatValueFromDB(uint16 index, uint64 guid)
 
 bool Player::LoadFromDB( uint32 guid, SqlQueryHolder *holder )
 {
-    ////                                                     0     1        2     3     4     5      6       7      8   9      10           11            12           13          14          15          16   17           18        19         20         21         22          23           24                 25                 26                 27       28       29       30       31         32           33            34        35    36      37                 38         39                  40              41                   42                         43
-    //QueryResult *result = CharacterDatabase.PQuery("SELECT guid, account, data, name, race, class, gender, level, xp, money, playerBytes, playerBytes2, playerFlags, position_x, position_y, position_z, map, orientation, taximask, cinematic, totaltime, leveltime, rest_bonus, logout_time, is_logout_resting, resettalents_cost, resettalents_time, trans_x, trans_y, trans_z, trans_o, transguid, extra_flags, stable_slots, at_login, zone, online, death_expire_time, taxi_path, honor_highest_rank, honor_standing, stored_honor_rating, stored_dishonorablekills , stored_honorable_kills FROM characters WHERE guid = '%u'", guid);
+    //       0     1        2     3     4     5      6       7      8   9      10           11            12
+    //SELECT guid, account, data, name, race, class, gender, level, xp, money, playerBytes, playerBytes2, playerFlags,"
+    // 13          14          15          16   17           18        19         20         21         22          23           24                 25
+    //"position_x, position_y, position_z, map, orientation, taximask, cinematic, totaltime, leveltime, rest_bonus, logout_time, is_logout_resting, resettalents_cost,"
+    // 26                 27       28       29       30       31         32           33            34        35    36      37                 38
+    //"resettalents_time, trans_x, trans_y, trans_z, trans_o, transguid, extra_flags, stable_slots, at_login, zone, online, death_expire_time, taxi_path,
+    // 39                  40              41                   42                         43
+    //"honor_highest_rank, honor_standing, stored_honor_rating, stored_dishonorablekills , stored_honorable_kills,"
+    // 44               45
+    //"watchedFaction,  drunk,"
+    // 46      47      48      49      50      51
+    //"health, power1, power2, power3, power4, power5 FROM characters WHERE guid = '%u'", GUID_LOPART(m_guid));
     QueryResult *result = holder->GetResult(PLAYER_LOGIN_QUERY_LOADFROM);
 
     if(!result)
@@ -13515,11 +13527,12 @@ bool Player::LoadFromDB( uint32 guid, SqlQueryHolder *holder )
     SetUInt32Value(PLAYER_BYTES, fields[10].GetUInt32());
     SetUInt32Value(PLAYER_BYTES_2, fields[11].GetUInt32());
 
-    m_drunk = GetUInt16Value(PLAYER_BYTES_3, 0) & 0xFFFE;
+    m_drunk = fields[45].GetUInt16();
 
     SetUInt16Value(PLAYER_BYTES_3, 0, (m_drunk & 0xFFFE) | gender);
 
     SetUInt32Value(PLAYER_FLAGS, fields[12].GetUInt32());
+    SetInt32Value(PLAYER_FIELD_WATCHED_FACTION_INDEX, fields[44].GetInt32());
 
     // cleanup inventory related item value fields (its will be filled correctly in _LoadInventory)
     for(uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
@@ -13533,10 +13546,6 @@ bool Player::LoadFromDB( uint32 guid, SqlQueryHolder *holder )
             m_items[slot] = NULL;
         }
     }
-
-    // update money limits
-    if(GetMoney() > MAX_MONEY_AMOUNT)
-        SetMoney(MAX_MONEY_AMOUNT);
 
     DEBUG_FILTER_LOG(LOG_FILTER_PLAYER_STATS, "Load Basic value of player %s is: ", m_name.c_str());
     outDebugStatsValues();
@@ -13761,8 +13770,6 @@ bool Player::LoadFromDB( uint32 guid, SqlQueryHolder *holder )
 
     std::string taxi_nodes = fields[38].GetCppString();
 
-    delete result;
-
     // clear channel spell data (if saved at channel spell casting)
     SetChannelObjectGuid(ObjectGuid());
     SetUInt32Value(UNIT_CHANNEL_SPELL,0);
@@ -13790,12 +13797,6 @@ bool Player::LoadFromDB( uint32 guid, SqlQueryHolder *holder )
     // make sure the unit is considered not in duel for proper loading
     SetUInt64Value(PLAYER_DUEL_ARBITER, 0);
     SetUInt32Value(PLAYER_DUEL_TEAM, 0);
-
-    // remember loaded power/health values to restore after stats initialization and modifier applying
-    uint32 savedHealth = GetHealth();
-    uint32 savedPower[MAX_POWERS];
-    for(uint32 i = 0; i < MAX_POWERS; ++i)
-        savedPower[i] = GetPower(Powers(i));
 
     // reset stats before loading any modifiers
     InitStatsForLevel();
@@ -13895,12 +13896,19 @@ bool Player::LoadFromDB( uint32 guid, SqlQueryHolder *holder )
     UpdateAllStats();
 
     // restore remembered power/health values (but not more max values)
-    SetHealth(savedHealth > GetMaxHealth() ? GetMaxHealth() : savedHealth);
+    uint32 savedhealth = fields[46].GetUInt32();
+    SetHealth(savedhealth > GetMaxHealth() ? GetMaxHealth() : savedhealth);
     for(uint32 i = 0; i < MAX_POWERS; ++i)
-        SetPower(Powers(i),savedPower[i] > GetMaxPower(Powers(i)) ? GetMaxPower(Powers(i)) : savedPower[i]);
+    {
+        uint32 savedpower = fields[47+i].GetUInt32();
+        SetPower(Powers(i),savedpower > GetMaxPower(Powers(i)) ? GetMaxPower(Powers(i)) : savedpower);
+    }
 
     DEBUG_FILTER_LOG(LOG_FILTER_PLAYER_STATS, "The value of player %s after load item and aura is: ", m_name.c_str());
     outDebugStatsValues();
+
+    // all fields read
+    delete result;
 
     // GM state
     if(GetSession()->GetSecurity() > SEC_PLAYER)
@@ -14919,7 +14927,8 @@ void Player::SaveToDB()
         "totaltime, leveltime, rest_bonus, logout_time, is_logout_resting, resettalents_cost, resettalents_time, "
         "trans_x, trans_y, trans_z, trans_o, transguid, extra_flags, stable_slots, at_login, zone, "
         "death_expire_time, taxi_path, "
-        "honor_highest_rank, honor_standing, stored_honor_rating , stored_dishonorable_kills, stored_honorable_kills) VALUES ("
+        "honor_highest_rank, honor_standing, stored_honor_rating , stored_dishonorable_kills, stored_honorable_kills, "
+        "watchedFaction, drunk, health, power1, power2, power3, power4, power5) VALUES ("
         << GetGUIDLow() << ", "
         << GetSession()->GetAccountId() << ", '"
         << sql_name << "', "
@@ -15001,7 +15010,17 @@ void Player::SaveToDB()
     ss << m_standing_pos << ", ";
     ss << finiteAlways(m_stored_honor) << ", ";
     ss << m_stored_dishonorableKills << ", ";
-    ss << m_stored_honorableKills;
+    ss << m_stored_honorableKills << ", ";
+
+    // FIXME: at this moment send to DB as unsigned, including unit32(-1)
+    ss << GetUInt32Value(PLAYER_FIELD_WATCHED_FACTION_INDEX) << ", ";
+
+    ss << (uint16)(GetUInt32Value(PLAYER_BYTES_3) & 0xFFFE) << ", ";
+
+    ss << GetHealth();
+
+    for(uint32 i = 0; i < MAX_POWERS; ++i)
+        ss << "," << GetPower(Powers(i));
 
     ss << ")";
 
@@ -17910,7 +17929,7 @@ uint32 Player::GetResurrectionSpellId()
     }
 
     // Reincarnation (passive spell)                        // prio: 1
-    if(prio < 1 && HasSpell(20608) && !HasSpellCooldown(21169) && HasItemCount(17030,EFFECT_INDEX_1))
+    if (prio < 1 && HasSpell(20608) && !HasSpellCooldown(21169) && HasItemCount(17030,EFFECT_INDEX_1))
         spell_id = 21169;
 
     return spell_id;
@@ -18748,18 +18767,15 @@ void Player::SendClearCooldown( uint32 spell_id, Unit* target )
     SendDirectMessage(&data);
 }
 
-void Player::BuildTeleportAckMsg( WorldPacket *data, float x, float y, float z, float ang ) const
+void Player::BuildTeleportAckMsg(WorldPacket& data, float x, float y, float z, float ang) const
 {
-    data->Initialize(MSG_MOVE_TELEPORT_ACK, 41);
-    *data << GetPackGUID();
-    *data << uint32(0);                                     // this value increments every time
-    *data << uint32(m_movementInfo.GetMovementFlags());     // movement flags
-    *data << uint32(getMSTime());                           // time
-    *data << x;
-    *data << y;
-    *data << z;
-    *data << ang;
-    *data << uint32(0);
+    MovementInfo mi = m_movementInfo;
+    mi.ChangePosition(x, y, z, ang);
+
+    data.Initialize(MSG_MOVE_TELEPORT_ACK, 41);
+    data << GetPackGUID();
+    data << uint32(0);                                      // this value increments every time
+    data << mi;
 }
 
 bool Player::HasMovementFlag( MovementFlags f ) const
