@@ -34,9 +34,9 @@
 #include "Group.h"
 #include "MapRefManager.h"
 #include "DBCEnums.h"
-#include "MapInstanced.h"
 #include "InstanceSaveMgr.h"
 #include "VMapFactory.h"
+#include "BattleGroundMgr.h"
 
 #define MAX_GRID_LOAD_TIME      50
 
@@ -58,88 +58,42 @@ Map::~Map()
 
     if (m_instanceSave)
         m_instanceSave->SetUsedByMapState(false);           // field pointer can be deleted after this
-}
 
-void Map::LoadVMap(int gx,int gy)
-{
-                                                            // x and y are swapped !!
-    VMAP::VMAPLoadResult vmapLoadResult = VMAP::VMapFactory::createOrGetVMapManager()->loadMap((sWorld.GetDataPath()+ "vmaps").c_str(),  GetId(), gx,gy);
-    switch(vmapLoadResult)
+    if(i_data)
     {
-        case VMAP::VMAP_LOAD_RESULT_OK:
-            DETAIL_LOG("VMAP loaded name:%s, id:%d, x:%d, y:%d (vmap rep.: x:%d, y:%d)", GetMapName(), GetId(), gx,gy,gx,gy);
-            break;
-        case VMAP::VMAP_LOAD_RESULT_ERROR:
-            DETAIL_LOG("Could not load VMAP name:%s, id:%d, x:%d, y:%d (vmap rep.: x:%d, y:%d)", GetMapName(), GetId(), gx,gy,gx,gy);
-            break;
-        case VMAP::VMAP_LOAD_RESULT_IGNORED:
-            DEBUG_LOG("Ignored VMAP name:%s, id:%d, x:%d, y:%d (vmap rep.: x:%d, y:%d)", GetMapName(), GetId(), gx,gy,gx,gy);
-            break;
-    }
-}
-
-void Map::LoadMap(int gx,int gy, bool reload)
-{
-    if( i_InstanceId != 0 )
-    {
-        if(GridMaps[gx][gy])
-            return;
-
-        // load grid map for base map
-        if (!m_parentMap->GridMaps[gx][gy])
-            m_parentMap->EnsureGridCreated(GridPair(63-gx,63-gy));
-
-        ((MapInstanced*)(m_parentMap))->AddGridMapReference(GridPair(gx,gy));
-        GridMaps[gx][gy] = m_parentMap->GridMaps[gx][gy];
-        return;
+        delete i_data;
+        i_data = NULL;
     }
 
-    if(GridMaps[gx][gy] && !reload)
-        return;
-
-    //map already load, delete it before reloading (Is it necessary? Do we really need the ability the reload maps during runtime?)
-    if(GridMaps[gx][gy])
-    {
-        DETAIL_LOG("Unloading already loaded map %u before reloading.",i_id);
-        delete (GridMaps[gx][gy]);
-        GridMaps[gx][gy]=NULL;
-    }
-
-    // map file name
-    char *tmp=NULL;
-    int len = sWorld.GetDataPath().length()+strlen("maps/%03u%02u%02u.map")+1;
-    tmp = new char[len];
-    snprintf(tmp, len, (char *)(sWorld.GetDataPath()+"maps/%03u%02u%02u.map").c_str(),i_id,gx,gy);
-    DETAIL_LOG("Loading map %s",tmp);
-    // loading data
-    GridMaps[gx][gy] = new GridMap();
-    if (!GridMaps[gx][gy]->loadData(tmp))
-    {
-        sLog.outError("Error load map file: \n %s\n", tmp);
-    }
-    delete [] tmp;
+    //release reference count
+    if(m_TerrainData->Release())
+        sTerrainMgr.UnloadTerrain(m_TerrainData->GetMapId());
 }
 
 void Map::LoadMapAndVMap(int gx,int gy)
 {
-    LoadMap(gx,gy);
-    if(i_InstanceId == 0)
-        LoadVMap(gx, gy);                                   // Only load the data for the base map
+    if(m_bLoadedGrids[gx][gx])
+        return;
+
+    GridMap * pInfo = m_TerrainData->Load(gx, gy);
+    if(pInfo)
+        m_bLoadedGrids[gx][gy] = true;
 }
 
-Map::Map(uint32 id, time_t expiry, uint32 InstanceId, Map* _parent)
+Map::Map(uint32 id, time_t expiry, uint32 InstanceId)
   : i_mapEntry (sMapStore.LookupEntry(id)),
   i_id(id), i_InstanceId(InstanceId), m_unloadTimer(0),
   m_VisibleDistance(DEFAULT_VISIBILITY_DISTANCE), m_instanceSave(NULL),
   m_activeNonPlayersIter(m_activeNonPlayers.end()),
-  i_gridExpiry(expiry), m_parentMap(_parent ? _parent : this)
+  i_gridExpiry(expiry), m_TerrainData(sTerrainMgr.LoadTerrain(id)),
+  i_data(NULL), i_script_id(0)
 {
-    for(unsigned int idx=0; idx < MAX_NUMBER_OF_GRIDS; ++idx)
+    for(unsigned int j=0; j < MAX_NUMBER_OF_GRIDS; ++j)
     {
-        for(unsigned int j=0; j < MAX_NUMBER_OF_GRIDS; ++j)
+        for(unsigned int idx=0; idx < MAX_NUMBER_OF_GRIDS; ++idx)
         {
             //z code
-            GridMaps[idx][j] =NULL;
+            m_bLoadedGrids[idx][j] = false;
             setNGrid(NULL, idx, j);
         }
     }
@@ -147,6 +101,9 @@ Map::Map(uint32 id, time_t expiry, uint32 InstanceId, Map* _parent)
 
     //lets initialize visibility distance for map
     Map::InitVisibilityDistance();
+
+    //add reference for TerrainData object
+    m_TerrainData->AddRef();
 }
 
 void Map::InitVisibilityDistance()
@@ -285,7 +242,7 @@ Map::EnsureGridCreated(const GridPair &p)
             int gx = (MAX_NUMBER_OF_GRIDS - 1) - p.x_coord;
             int gy = (MAX_NUMBER_OF_GRIDS - 1) - p.y_coord;
 
-            if(!GridMaps[gx][gy])
+            if(!m_bLoadedGrids[gx][gy])
                 LoadMapAndVMap(gx,gy);
         }
     }
@@ -371,6 +328,10 @@ bool Map::Add(Player *player)
     UpdateObjectVisibility(player,cell,p);
 
     AddNotifier(player,cell,p);
+
+    if (i_data)
+        i_data->OnPlayerEnter(player);
+
     return true;
 }
 
@@ -510,7 +471,10 @@ void Map::Update(const uint32 &t_diff)
     {
         Player* plr = m_mapRefIter->getSource();
         if(plr && plr->IsInWorld())
-            plr->Update(t_diff);
+        {
+            WorldObject::UpdateHelper helper(plr);
+            helper.Update(t_diff);
+        }
     }
 
     /// update active cells around players and active objects
@@ -613,10 +577,16 @@ void Map::Update(const uint32 &t_diff)
     ///- Process necessary scripts
     if (!m_scriptSchedule.empty())
         ScriptsProcess();
+
+    if(i_data)
+        i_data->Update(t_diff);
 }
 
 void Map::Remove(Player *player, bool remove)
 {
+    if (i_data)
+        i_data->OnPlayerLeave(player);
+
     if(remove)
         player->CleanupsBeforeDelete();
     else
@@ -911,23 +881,14 @@ bool Map::UnloadGrid(const uint32 &x, const uint32 &y, bool pForce)
     int gx = (MAX_NUMBER_OF_GRIDS - 1) - x;
     int gy = (MAX_NUMBER_OF_GRIDS - 1) - y;
 
-    // delete grid map, but don't delete if it is from parent map (and thus only reference)
-    //+++if (GridMaps[gx][gy]) don't check for GridMaps[gx][gy], we might have to unload vmaps
+    // unload GridMap - it is reference-countable so will be deleted safely when lockCount < 1
+    // also simply set Map's pointer to corresponding GridMap object to NULL
+    if(m_bLoadedGrids[gx][gy])
     {
-        if (i_InstanceId == 0)
-        {
-            if(GridMaps[gx][gy])
-            {
-                GridMaps[gx][gy]->unloadData();
-                delete GridMaps[gx][gy];
-            }
-            VMAP::VMapFactory::createOrGetVMapManager()->unloadMap(GetId(), gx, gy);
-        }
-        else
-            ((MapInstanced*)m_parentMap)->RemoveGridMapReference(GridPair(gx, gy));
-
-        GridMaps[gx][gy] = NULL;
+        m_bLoadedGrids[gx][gy] = false;
+        m_TerrainData->Unload(gx, gy);
     }
+
     DEBUG_LOG("Unloading grid[%u,%u] for map %u finished", x,y, i_id);
     return true;
 }
@@ -940,311 +901,6 @@ void Map::UnloadAll(bool pForce)
         ++i;
         UnloadGrid(grid.getX(), grid.getY(), pForce);       // deletes the grid and removes it from the GridRefManager
     }
-}
-
-inline GridMap *Map::GetGrid(float x, float y)
-{
-    // half opt method
-    int gx=(int)(32-x/SIZE_OF_GRIDS);                       //grid x
-    int gy=(int)(32-y/SIZE_OF_GRIDS);                       //grid y
-
-    // ensure GridMap is loaded
-    EnsureGridCreated(GridPair(63-gx,63-gy));
-
-    return GridMaps[gx][gy];
-}
-
-float Map::GetHeight(float x, float y, float z, bool pUseVmaps, float maxSearchDist) const
-{
-    // find raw .map surface under Z coordinates
-    float mapHeight;
-    float z2 = z + 2.f;
-    if (GridMap *gmap = const_cast<Map*>(this)->GetGrid(x, y))
-    {
-        float _mapheight = gmap->getHeight(x,y);
-
-        // look from a bit higher pos to find the floor, ignore under surface case
-        if (z2 > _mapheight)
-            mapHeight = _mapheight;
-        else
-            mapHeight = VMAP_INVALID_HEIGHT_VALUE;
-    }
-    else
-        mapHeight = VMAP_INVALID_HEIGHT_VALUE;
-
-    float vmapHeight;
-    if (pUseVmaps)
-    {
-        VMAP::IVMapManager* vmgr = VMAP::VMapFactory::createOrGetVMapManager();
-        if (vmgr->isHeightCalcEnabled())
-        {
-            // if mapHeight has been found search vmap height at least until mapHeight point
-            // this prevent case when original Z "too high above ground and vmap height search fail"
-            // this will not affect most normal cases (no map in instance, or stay at ground at continent)
-            if (mapHeight > INVALID_HEIGHT && z2 - mapHeight > maxSearchDist)
-                maxSearchDist = z2 - mapHeight + 1.0f;      // 1.0 make sure that we not fail for case when map height near but above for vamp height
-
-            // look from a bit higher pos to find the floor
-            vmapHeight = vmgr->getHeight(GetId(), x, y, z2, maxSearchDist);
-        }
-        else
-            vmapHeight = VMAP_INVALID_HEIGHT_VALUE;
-    }
-    else
-        vmapHeight = VMAP_INVALID_HEIGHT_VALUE;
-
-    // mapHeight set for any above raw ground Z or <= INVALID_HEIGHT
-    // vmapheight set for any under Z value or <= INVALID_HEIGHT
-
-    if (vmapHeight > INVALID_HEIGHT)
-    {
-        if (mapHeight > INVALID_HEIGHT)
-        {
-            // we have mapheight and vmapheight and must select more appropriate
-
-            // we are already under the surface or vmap height above map heigt
-            // or if the distance of the vmap height is less the land height distance
-            if (z < mapHeight || vmapHeight > mapHeight || fabs(mapHeight-z) > fabs(vmapHeight-z))
-                return vmapHeight;
-            else
-                return mapHeight;                           // better use .map surface height
-
-        }
-        else
-            return vmapHeight;                              // we have only vmapHeight (if have)
-    }
-
-    return mapHeight;
-}
-
-inline bool IsOutdoorWMO(uint32 mogpFlags, int32 /*adtId*/, int32 /*rootId*/, int32 /*groupId*/,
-                              WMOAreaTableEntry const* /*wmoEntry*/, AreaTableEntry const* /*atEntry*/)
-{
-    /* pre-3.x areas:
-      a) not have AREA_FLAG_OUTSIDE and AREA_FLAG_INSIDE
-      b) wmoEntry->Flags always == 0
-      But possible use better check mask for mogpFlags
-
-    bool outdoor = true;
-
-    if(wmoEntry && atEntry)
-    {
-        if(atEntry->flags & AREA_FLAG_OUTSIDE)
-            return true;
-        if(atEntry->flags & AREA_FLAG_INSIDE)
-            return false;
-    }
-
-    outdoor = mogpFlags&0x8;
-
-    if(wmoEntry)
-    {
-        if(wmoEntry->Flags & 4)
-            return true;
-
-        if((wmoEntry->Flags & 2)!=0)
-            outdoor = false;
-    }
-
-    return outdoor;
-    */
-
-    return mogpFlags & 0x8008;
-}
-
-bool Map::IsOutdoors(float x, float y, float z) const
-{
-    uint32 mogpFlags;
-    int32 adtId, rootId, groupId;
-
-    // no wmo found? -> outside by default
-    if(!GetAreaInfo(x, y, z, mogpFlags, adtId, rootId, groupId))
-        return true;
-
-    AreaTableEntry const* atEntry = 0;
-    WMOAreaTableEntry const* wmoEntry= GetWMOAreaTableEntryByTripple(rootId, adtId, groupId);
-    if(wmoEntry)
-    {
-        DEBUG_LOG("Got WMOAreaTableEntry! flag %u, areaid %u", wmoEntry->Flags, wmoEntry->areaId);
-
-        atEntry = GetAreaEntryByAreaID(wmoEntry->areaId);
-    }
-
-    return IsOutdoorWMO(mogpFlags, adtId, rootId, groupId, wmoEntry, atEntry);
-}
-
-bool Map::GetAreaInfo(float x, float y, float z, uint32 &flags, int32 &adtId, int32 &rootId, int32 &groupId) const
-{
-    float vmap_z = z;
-    VMAP::IVMapManager* vmgr = VMAP::VMapFactory::createOrGetVMapManager();
-    if (vmgr->getAreaInfo(GetId(), x, y, vmap_z, flags, adtId, rootId, groupId))
-    {
-        // check if there's terrain between player height and object height
-        if(GridMap *gmap = const_cast<Map*>(this)->GetGrid(x, y))
-        {
-            float _mapheight = gmap->getHeight(x,y);
-            // z + 2.0f condition taken from GetHeight(), not sure if it's such a great choice...
-            if(z + 2.0f > _mapheight &&  _mapheight > vmap_z)
-                return false;
-        }
-        return true;
-    }
-    return false;
-}
-
-uint16 Map::GetAreaFlag(float x, float y, float z, bool *isOutdoors) const
-{
-    uint32 mogpFlags;
-    int32 adtId, rootId, groupId;
-    WMOAreaTableEntry const* wmoEntry = 0;
-    AreaTableEntry const* atEntry = 0;
-    bool haveAreaInfo = false;
-
-    if(GetAreaInfo(x, y, z, mogpFlags, adtId, rootId, groupId))
-    {
-        haveAreaInfo = true;
-        if(wmoEntry = GetWMOAreaTableEntryByTripple(rootId, adtId, groupId))
-            atEntry = GetAreaEntryByAreaID(wmoEntry->areaId);
-    }
-
-    uint16 areaflag;
-    if (atEntry)
-        areaflag = atEntry->exploreFlag;
-    else
-    {
-        if(GridMap *gmap = const_cast<Map*>(this)->GetGrid(x, y))
-            areaflag = gmap->getArea(x, y);
-        // this used while not all *.map files generated (instances)
-        else
-            areaflag = GetAreaFlagByMapId(i_id);
-    }
-
-    if (isOutdoors)
-    {
-        if (haveAreaInfo)
-            *isOutdoors = IsOutdoorWMO(mogpFlags, adtId, rootId, groupId, wmoEntry, atEntry);
-        else
-            *isOutdoors = true;
-    }
-    return areaflag;
-}
-
-uint8 Map::GetTerrainType(float x, float y ) const
-{
-    if(GridMap *gmap = const_cast<Map*>(this)->GetGrid(x, y))
-        return gmap->getTerrainType(x, y);
-    else
-        return 0;
-}
-
-GridMapLiquidStatus Map::getLiquidStatus(float x, float y, float z, uint8 ReqLiquidType, GridMapLiquidData *data) const
-{
-    GridMapLiquidStatus result = LIQUID_MAP_NO_WATER;
-    VMAP::IVMapManager* vmgr = VMAP::VMapFactory::createOrGetVMapManager();
-    float liquid_level, ground_level = INVALID_HEIGHT;
-    uint32 liquid_type;
-    if (vmgr->GetLiquidLevel(GetId(), x, y, z, ReqLiquidType, liquid_level, ground_level, liquid_type))
-    {
-        DEBUG_LOG("getLiquidStatus(): vmap liquid level: %f ground: %f type: %u", liquid_level, ground_level, liquid_type);
-        // Check water level and ground level
-        if (liquid_level > ground_level && z > ground_level - 2)
-        {
-            // All ok in water -> store data
-            if (data)
-            {
-                data->type  = liquid_type;
-                data->level = liquid_level;
-                data->depth_level = ground_level;
-            }
-
-            // For speed check as int values
-            int delta = int((liquid_level - z) * 10);
-
-            // Get position delta
-            if (delta > 20)                   // Under water
-                return LIQUID_MAP_UNDER_WATER;
-            if (delta > 0 )                   // In water
-                return LIQUID_MAP_IN_WATER;
-            if (delta > -1)                   // Walk on water
-                return LIQUID_MAP_WATER_WALK;
-            result = LIQUID_MAP_ABOVE_WATER;
-        }
-    }
-    if(GridMap* gmap = const_cast<Map*>(this)->GetGrid(x, y))
-    {
-        GridMapLiquidData map_data;
-        GridMapLiquidStatus map_result = gmap->getLiquidStatus(x, y, z, ReqLiquidType, &map_data);
-        // Not override LIQUID_MAP_ABOVE_WATER with LIQUID_MAP_NO_WATER:
-        if (map_result != LIQUID_MAP_NO_WATER && (map_data.level > ground_level))
-        {
-            if (data)
-                *data = map_data;
-            return map_result;
-        }
-    }
-    return result;
-}
-
-float Map::GetWaterLevel(float x, float y ) const
-{
-    if(GridMap* gmap = const_cast<Map*>(this)->GetGrid(x, y))
-        return gmap->getLiquidLevel(x, y);
-    else
-        return 0;
-}
-
-uint32 Map::GetAreaIdByAreaFlag(uint16 areaflag,uint32 map_id)
-{
-    AreaTableEntry const *entry = GetAreaEntryByAreaFlagAndMap(areaflag,map_id);
-
-    if (entry)
-        return entry->ID;
-    else
-        return 0;
-}
-
-uint32 Map::GetZoneIdByAreaFlag(uint16 areaflag,uint32 map_id)
-{
-    AreaTableEntry const *entry = GetAreaEntryByAreaFlagAndMap(areaflag,map_id);
-
-    if( entry )
-        return ( entry->zone != 0 ) ? entry->zone : entry->ID;
-    else
-        return 0;
-}
-
-void Map::GetZoneAndAreaIdByAreaFlag(uint32& zoneid, uint32& areaid, uint16 areaflag,uint32 map_id)
-{
-    AreaTableEntry const *entry = GetAreaEntryByAreaFlagAndMap(areaflag,map_id);
-
-    areaid = entry ? entry->ID : 0;
-    zoneid = entry ? (( entry->zone != 0 ) ? entry->zone : entry->ID) : 0;
-}
-
-bool Map::IsInWater(float x, float y, float pZ, GridMapLiquidData *data) const
-{
-    // Check surface in x, y point for liquid
-    if (const_cast<Map*>(this)->GetGrid(x, y))
-    {
-        GridMapLiquidData liquid_status;
-        GridMapLiquidData *liquid_ptr = data ? data : &liquid_status;
-        if (getLiquidStatus(x, y, pZ, MAP_ALL_LIQUIDS, liquid_ptr))
-        {
-            //if (liquid_prt->level - liquid_prt->depth_level > 2) //???
-                return true;
-        }
-    }
-    return false;
-}
-
-bool Map::IsUnderWater(float x, float y, float z) const
-{
-    if (const_cast<Map*>(this)->GetGrid(x, y))
-    {
-        if (getLiquidStatus(x, y, z, MAP_LIQUID_TYPE_WATER|MAP_LIQUID_TYPE_OCEAN)&LIQUID_MAP_UNDER_WATER)
-            return true;
-    }
-    return false;
 }
 
 bool Map::CheckGridIntegrity(Creature* c, bool moved) const
@@ -1557,6 +1213,64 @@ void Map::RemoveFromActive( WorldObject* obj )
     }
 }
 
+void Map::CreateInstanceData(bool load)
+{
+    if(i_data != NULL)
+        return;
+
+    if (Instanceable())
+    {
+        if (InstanceTemplate const* mInstance = ObjectMgr::GetInstanceTemplate(GetId()))
+            i_script_id = mInstance->script_id;
+    }
+    else
+    {
+        if (WorldTemplate const* mInstance = ObjectMgr::GetWorldTemplate(GetId()))
+            i_script_id = mInstance->script_id;
+    }
+
+    if (!i_script_id)
+        return;
+
+    i_data = sScriptMgr.CreateInstanceData(this);
+    if(!i_data)
+        return;
+
+    if (load)
+    {
+        // TODO: make a global storage for this
+        QueryResult* result;
+
+        if (Instanceable())
+            result = CharacterDatabase.PQuery("SELECT data FROM instance WHERE id = '%u'", i_InstanceId);
+        else
+            result = CharacterDatabase.PQuery("SELECT data FROM world WHERE map = '%u'", GetId());
+
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            const char* data = fields[0].GetString();
+            if (data)
+            {
+                DEBUG_LOG("Loading instance data for `%s` (Map: %u Instance: %u)", sScriptMgr.GetScriptName(i_script_id), GetId(), i_InstanceId);
+                i_data->Load(data);
+            }
+            delete result;
+        }
+        else
+        {
+            // for non-instanceable map always add data to table if not found, later code expected that for map in `word` exist always after load
+            if (!Instanceable())
+                CharacterDatabase.PExecute("INSERT INTO world VALUES ('%u', '')", GetId());
+        }
+    }
+    else
+    {
+        DEBUG_LOG("New instance data, \"%s\" ,initialized!", sScriptMgr.GetScriptName(i_script_id));
+        i_data->Initialize();
+    }
+}
+
 template void Map::Add(Corpse *);
 template void Map::Add(Creature *);
 template void Map::Add(GameObject *);
@@ -1569,10 +1283,9 @@ template void Map::Remove(DynamicObject *, bool);
 
 /* ******* Dungeon Instance Maps ******* */
 
-InstanceMap::InstanceMap(uint32 id, time_t expiry, uint32 InstanceId, Map* _parent)
-  : Map(id, expiry, InstanceId, _parent),
-    m_resetAfterUnload(false), m_unloadWhenEmpty(false),
-    i_data(NULL), i_script_id(0)
+InstanceMap::InstanceMap(uint32 id, time_t expiry, uint32 InstanceId)
+  : Map(id, expiry, InstanceId),
+    m_resetAfterUnload(false), m_unloadWhenEmpty(false)
 {
     //lets initialize visibility distance for dungeons
     InstanceMap::InitVisibilityDistance();
@@ -1591,11 +1304,6 @@ InstanceMap::InstanceMap(uint32 id, time_t expiry, uint32 InstanceId, Map* _pare
 
 InstanceMap::~InstanceMap()
 {
-    if(i_data)
-    {
-        delete i_data;
-        i_data = NULL;
-    }
 }
 
 void InstanceMap::InitVisibilityDistance()
@@ -1760,18 +1468,19 @@ bool InstanceMap::Add(Player *player)
     // this will acquire the same mutex so it cannot be in the previous block
     Map::Add(player);
 
-    if (i_data)
-        i_data->OnPlayerEnter(player);
-
     return true;
 }
 
 void InstanceMap::Update(const uint32& t_diff)
 {
     Map::Update(t_diff);
+}
 
-    if(i_data)
-        i_data->Update(t_diff);
+void BattleGroundMap::Update(const uint32& diff)
+{
+    Map::Update(diff);
+
+    GetBG()->Update(diff);
 }
 
 void InstanceMap::Remove(Player *player, bool remove)
@@ -1782,51 +1491,10 @@ void InstanceMap::Remove(Player *player, bool remove)
     if(!m_unloadTimer && m_mapRefManager.getSize() == 1)
         m_unloadTimer = m_unloadWhenEmpty ? MIN_UNLOAD_DELAY : std::max(sWorld.getConfig(CONFIG_UINT32_INSTANCE_UNLOAD_DELAY), (uint32)MIN_UNLOAD_DELAY);
 
-    if (i_data)
-        i_data->OnPlayerLeave(player);
-
     Map::Remove(player, remove);
 
     // for normal instances schedule the reset after all players have left
     SetResetSchedule(true);
-}
-
-void InstanceMap::CreateInstanceData(bool load)
-{
-    if(i_data != NULL)
-        return;
-
-    InstanceTemplate const* mInstance = ObjectMgr::GetInstanceTemplate(GetId());
-    if (mInstance)
-    {
-        i_script_id = mInstance->script_id;
-        i_data = sScriptMgr.CreateInstanceData(this);
-    }
-
-    if(!i_data)
-        return;
-
-    if(load)
-    {
-        // TODO: make a global storage for this
-        QueryResult* result = CharacterDatabase.PQuery("SELECT data FROM instance WHERE map = '%u' AND id = '%u'", GetId(), i_InstanceId);
-        if (result)
-        {
-            Field* fields = result->Fetch();
-            const char* data = fields[0].GetString();
-            if(data)
-            {
-                DEBUG_LOG("Loading instance data for `%s` with id %u", sScriptMgr.GetScriptName(i_script_id), i_InstanceId);
-                i_data->Load(data);
-            }
-            delete result;
-        }
-    }
-    else
-    {
-        DEBUG_LOG("New instance data, \"%s\" ,initialized!", sScriptMgr.GetScriptName(i_script_id));
-        i_data->Initialize();
-    }
 }
 
 /*
@@ -1940,8 +1608,8 @@ uint32 InstanceMap::GetMaxPlayers() const
 
 /* ******* Battleground Instance Maps ******* */
 
-BattleGroundMap::BattleGroundMap(uint32 id, time_t expiry, uint32 InstanceId, Map* _parent)
-  : Map(id, expiry, InstanceId, _parent)
+BattleGroundMap::BattleGroundMap(uint32 id, time_t expiry, uint32 InstanceId)
+  : Map(id, expiry, InstanceId)
 {
     //lets initialize visibility distance for BG
     BattleGroundMap::InitVisibilityDistance();

@@ -401,6 +401,16 @@ struct GameObjectInfo
         }
     }
 
+    uint32 GetCooldown() const                              // not triggering at detection target or use until coolodwn expire
+    {
+        switch(type)
+        {
+            case GAMEOBJECT_TYPE_TRAP:        return trap.cooldown;
+            case GAMEOBJECT_TYPE_GOOBER:      return goober.cooldown;
+            default: return 0;
+        }
+    }
+
     uint32 GetLinkedGameObjectEntry() const
     {
         switch(type)
@@ -530,7 +540,7 @@ class MANGOS_DLL_SPEC GameObject : public WorldObject
         void RemoveFromWorld();
 
         bool Create(uint32 guidlow, uint32 name_id, Map *map, float x, float y, float z, float ang, float rotation0, float rotation1, float rotation2, float rotation3, uint32 animprogress, GOState go_state);
-        void Update(uint32 p_time);
+        void Update(uint32 update_diff, uint32 p_time);
         GameObjectInfo const* GetGOInfo() const;
 
         bool IsTransport() const;
@@ -652,7 +662,7 @@ class MANGOS_DLL_SPEC GameObject : public WorldObject
         LootState   m_lootState;
         bool        m_spawnedByDefault;
         time_t      m_cooldownTime;                         // used as internal reaction delay time store (not state change reaction).
-                                                            // For traps this: spell casting cooldown, for doors/buttons: reset time.
+                                                            // For traps/goober this: spell casting cooldown, for doors/buttons: reset time.
 
         typedef std::set<ObjectGuid> GuidsSet;
 

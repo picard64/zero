@@ -64,6 +64,7 @@ class Unit;
 class Map;
 class UpdateMask;
 class InstanceData;
+class TerrainInfo;
 
 typedef UNORDERED_MAP<Player*, UpdateData> UpdateDataMapType;
 
@@ -78,6 +79,28 @@ struct WorldLocation
         : mapid(_mapid), coord_x(_x), coord_y(_y), coord_z(_z), orientation(_o) {}
     WorldLocation(WorldLocation const &loc)
         : mapid(loc.mapid), coord_x(loc.coord_x), coord_y(loc.coord_y), coord_z(loc.coord_z), orientation(loc.orientation) {}
+};
+
+
+//use this class to measure time between world update ticks
+//essential for units updating their spells after cells become active
+class WorldUpdateCounter
+{
+    public:
+        WorldUpdateCounter() : m_tmStart(0) {}
+
+        time_t timeElapsed()
+        {
+            if(!m_tmStart)
+                m_tmStart = WorldTimer::tickPrevTime();
+
+            return WorldTimer::getMSTimeDiff(m_tmStart, WorldTimer::tickTime());
+        }
+
+        void Reset() { m_tmStart = WorldTimer::tickTime(); }
+
+    private:
+        uint32 m_tmStart;
 };
 
 class MANGOS_DLL_SPEC Object
@@ -373,9 +396,31 @@ class MANGOS_DLL_SPEC WorldObject : public Object
     friend struct WorldObjectChangeAccumulator;
 
     public:
+
+        //class is used to manipulate with WorldUpdateCounter
+        //it is needed in order to get time diff between two object's Update() calls
+        class MANGOS_DLL_SPEC UpdateHelper
+        {
+            public:
+                explicit UpdateHelper(WorldObject * obj) : m_obj(obj) {}
+                ~UpdateHelper() { }
+
+                void Update( uint32 time_diff )
+                {
+                    m_obj->Update( m_obj->m_updateTracker.timeElapsed(), time_diff);
+                    m_obj->m_updateTracker.Reset();
+                }
+
+            private:
+                UpdateHelper( const UpdateHelper& );
+                UpdateHelper& operator=( const UpdateHelper& );
+
+                WorldObject * const m_obj;
+        };
+
         virtual ~WorldObject ( ) {}
 
-        virtual void Update ( uint32 /*time_diff*/ ) { }
+        virtual void Update ( uint32 /*update_diff*/, uint32 /*time_diff*/ ) {}
 
         void _Create( uint32 guidlow, HighGuid guidhigh );
 
@@ -394,10 +439,10 @@ class MANGOS_DLL_SPEC WorldObject : public Object
         float GetOrientation( ) const { return m_orientation; }
         void GetNearPoint2D( float &x, float &y, float distance, float absAngle) const;
         void GetNearPoint(WorldObject const* searcher, float &x, float &y, float &z, float searcher_bounding_radius, float distance2d, float absAngle) const;
-        void GetClosePoint(float &x, float &y, float &z, float bounding_radius, float distance2d = 0, float angle = 0) const
+        void GetClosePoint(float &x, float &y, float &z, float bounding_radius, float distance2d = 0, float angle = 0, const WorldObject* obj = NULL ) const
         {
             // angle calculated from current orientation
-            GetNearPoint(NULL, x, y, z, bounding_radius, distance2d, GetOrientation() + angle);
+            GetNearPoint(obj, x, y, z, bounding_radius, distance2d, GetOrientation() + angle);
         }
         void GetContactPoint( const WorldObject* obj, float &x, float &y, float &z, float distance2d = CONTACT_DISTANCE) const
         {
@@ -409,6 +454,7 @@ class MANGOS_DLL_SPEC WorldObject : public Object
 
         bool IsPositionValid() const;
         void UpdateGroundPositionZ(float x, float y, float &z) const;
+        void UpdateAllowedPositionZ(float x, float y, float &z) const;
 
         void GetRandomPoint( float x, float y, float z, float distance, float &rand_x, float &rand_y, float &rand_z ) const;
 
@@ -507,8 +553,8 @@ class MANGOS_DLL_SPEC WorldObject : public Object
         //used to check all object's GetMap() calls when object is not in world!
         void ResetMap() { m_currMap = NULL; }
 
-        //this function should be removed in nearest time...
-        Map const* GetBaseMap() const;
+        //obtain terrain data for map where this object belong...
+        TerrainInfo const* GetTerrain() const;
 
         void AddToClientUpdateList();
         void RemoveFromClientUpdateList();
@@ -543,6 +589,8 @@ class MANGOS_DLL_SPEC WorldObject : public Object
         float m_orientation;
 
         ViewPoint m_viewPoint;
+
+        WorldUpdateCounter m_updateTracker;
 };
 
 #endif

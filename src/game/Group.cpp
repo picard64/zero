@@ -31,7 +31,6 @@
 #include "BattleGround.h"
 #include "MapManager.h"
 #include "InstanceSaveMgr.h"
-#include "MapInstanced.h"
 #include "Util.h"
 #include "LootMgr.h"
 
@@ -768,7 +767,7 @@ void Group::CountTheRoll(Rolls::iterator& rollI)
                 else
                 {
                     item->is_blocked = false;
-                    player->SendEquipError( msg, NULL, NULL );
+                    player->SendEquipError( msg, NULL, NULL, roll->itemid );
                 }
             }
         }
@@ -814,7 +813,7 @@ void Group::CountTheRoll(Rolls::iterator& rollI)
                 else
                 {
                     item->is_blocked = false;
-                    player->SendEquipError( msg, NULL, NULL );
+                    player->SendEquipError( msg, NULL, NULL, roll->itemid );
                 }
             }
         }

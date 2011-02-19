@@ -26,7 +26,6 @@
 #include "BattleGroundWS.h"
 #include "MapManager.h"
 #include "Map.h"
-#include "MapInstanced.h"
 #include "ObjectMgr.h"
 #include "ProgressBar.h"
 #include "Chat.h"
@@ -145,7 +144,7 @@ GroupQueueInfo * BattleGroundQueue::AddGroup(Player *leader, Group* grp, BattleG
     GroupQueueInfo* ginfo = new GroupQueueInfo;
     ginfo->BgTypeId                  = BgTypeId;
     ginfo->IsInvitedToBGInstanceGUID = 0;
-    ginfo->JoinTime                  = getMSTime();
+    ginfo->JoinTime                  = WorldTimer::getMSTime();
     ginfo->RemoveInviteTime          = 0;
     ginfo->GroupTeam                 = leader->GetTeam();
 
@@ -161,7 +160,7 @@ GroupQueueInfo * BattleGroundQueue::AddGroup(Player *leader, Group* grp, BattleG
 
     DEBUG_LOG("Adding Group to BattleGroundQueue bgTypeId : %u, bracket_id : %u, index : %u", BgTypeId, bracketId, index);
 
-    uint32 lastOnlineTime = getMSTime();
+    uint32 lastOnlineTime = WorldTimer::getMSTime();
 
     //add players from group to ginfo
     {
@@ -232,7 +231,7 @@ GroupQueueInfo * BattleGroundQueue::AddGroup(Player *leader, Group* grp, BattleG
 
 void BattleGroundQueue::PlayerInvitedToBGUpdateAverageWaitTime(GroupQueueInfo* ginfo, BattleGroundBracketId bracket_id)
 {
-    uint32 timeInQueue = getMSTimeDiff(ginfo->JoinTime, getMSTime());
+    uint32 timeInQueue = WorldTimer::getMSTimeDiff(ginfo->JoinTime, WorldTimer::getMSTime());
     uint8 team_index = BG_TEAM_ALLIANCE;                    //default set to BG_TEAM_ALLIANCE - or non rated arenas!
 
     if (ginfo->GroupTeam == HORDE)
@@ -379,7 +378,7 @@ bool BattleGroundQueue::InviteGroupToBG(GroupQueueInfo * ginfo, BattleGround * b
         BattleGroundQueueTypeId bgQueueTypeId = BattleGroundMgr::BGQueueTypeId(bgTypeId);
         BattleGroundBracketId bracket_id = bg->GetBracketId();
 
-        ginfo->RemoveInviteTime = getMSTime() + INVITE_ACCEPT_WAIT_TIME;
+        ginfo->RemoveInviteTime = WorldTimer::getMSTime() + INVITE_ACCEPT_WAIT_TIME;
 
         // loop through the players
         for(std::map<uint64,PlayerQueueInfo*>::iterator itr = ginfo->Players.begin(); itr != ginfo->Players.end(); ++itr)
@@ -544,7 +543,7 @@ bool BattleGroundQueue::CheckPremadeMatch(BattleGroundBracketId bracket_id, uint
     // this could be 2 cycles but i'm checking only first team in queue - it can cause problem -
     // if first is invited to BG and seconds timer expired, but we can ignore it, because players have only 80 seconds to click to enter bg
     // and when they click or after 80 seconds the queue info is removed from queue
-    uint32 time_before = getMSTime() - sWorld.getConfig(CONFIG_UINT32_BATTLEGROUND_PREMADE_GROUP_WAIT_FOR_MATCH);
+    uint32 time_before = WorldTimer::getMSTime() - sWorld.getConfig(CONFIG_UINT32_BATTLEGROUND_PREMADE_GROUP_WAIT_FOR_MATCH);
     for(uint32 i = 0; i < BG_TEAMS_COUNT; i++)
     {
         if (!m_QueuedGroups[bracket_id][BG_QUEUE_PREMADE_ALLIANCE + i].empty())
@@ -824,55 +823,21 @@ BattleGroundMgr::~BattleGroundMgr()
 
 void BattleGroundMgr::DeleteAllBattleGrounds()
 {
+    // will also delete template bgs:
     for(uint32 i = BATTLEGROUND_TYPE_NONE; i < MAX_BATTLEGROUND_TYPE_ID; i++)
     {
         for(BattleGroundSet::iterator itr = m_BattleGrounds[i].begin(); itr != m_BattleGrounds[i].end();)
         {
             BattleGround * bg = itr->second;
-            m_BattleGrounds[i].erase(itr++);
-            if (!m_ClientBattleGroundIds[i][bg->GetBracketId()].empty())
-                m_ClientBattleGroundIds[i][bg->GetBracketId()].erase(bg->GetClientInstanceID());
+            itr++;
             delete bg;
         }
-    }
-
-    // destroy template battlegrounds that listed only in queues (other already terminated)
-    for(uint32 bgTypeId = 0; bgTypeId < MAX_BATTLEGROUND_TYPE_ID; ++bgTypeId)
-    {
-        // ~BattleGround call unregistring BG from queue
-        while(!BGFreeSlotQueue[bgTypeId].empty())
-            delete BGFreeSlotQueue[bgTypeId].front();
     }
 }
 
 // used to update running battlegrounds, and delete finished ones
 void BattleGroundMgr::Update(uint32 diff)
 {
-    BattleGroundSet::iterator itr, next;
-    for(uint32 i = BATTLEGROUND_TYPE_NONE; i < MAX_BATTLEGROUND_TYPE_ID; i++)
-    {
-        itr = m_BattleGrounds[i].begin();
-        // skip updating battleground template
-        if (itr != m_BattleGrounds[i].end())
-            ++itr;
-        for(; itr != m_BattleGrounds[i].end(); itr = next)
-        {
-            next = itr;
-            ++next;
-            itr->second->Update(diff);
-            // use the SetDeleteThis variable
-            // direct deletion caused crashes
-            if (itr->second->m_SetDeleteThis)
-            {
-                BattleGround * bg = itr->second;
-                m_BattleGrounds[i].erase(itr);
-                if (!m_ClientBattleGroundIds[i][bg->GetBracketId()].empty())
-                    m_ClientBattleGroundIds[i][bg->GetBracketId()].erase(bg->GetClientInstanceID());
-                delete bg;
-            }
-        }
-    }
-
     // update scheduled queues
     if (!m_QueueUpdateScheduler.empty())
     {
@@ -1116,8 +1081,9 @@ BattleGround * BattleGroundMgr::CreateNewBattleGround(BattleGroundTypeId bgTypeI
             return 0;
     }
 
-    // generate a new instance id
-    bg->SetInstanceID(sMapMgr.GenerateInstanceId());        // set instance id
+    // will also set m_bgMap, instanceid
+    sMapMgr.CreateBgMap(bg->GetMapId(), bg);
+
     bg->SetClientInstanceID(CreateClientVisibleInstanceId(bgTypeId, bracket_id));
 
     // reset the new bg (set status to status_wait_queue from status_none)
@@ -1145,7 +1111,6 @@ uint32 BattleGroundMgr::CreateBattleGround(BattleGroundTypeId bgTypeId, uint32 M
 
     bg->SetMapId(MapID);
     bg->SetTypeID(bgTypeId);
-    bg->SetInstanceID(0);
     bg->SetMinPlayersPerTeam(MinPlayersPerTeam);
     bg->SetMaxPlayersPerTeam(MaxPlayersPerTeam);
     bg->SetMinPlayers(MinPlayersPerTeam * 2);

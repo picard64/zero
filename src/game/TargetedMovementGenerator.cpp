@@ -56,7 +56,7 @@ void TargetedMovementGeneratorMedium<T,D>::_setTargetLocation(T &owner)
     else
     {
         // to at i_offset distance from target and i_angle from target facing
-        i_target->GetClosePoint(x, y, z, owner.GetObjectBoundingRadius(), i_offset, i_angle);
+        i_target->GetClosePoint(x, y, z, owner.GetObjectBoundingRadius(), i_offset, i_angle, &owner);
     }
 
     /*
@@ -75,11 +75,6 @@ void TargetedMovementGeneratorMedium<T,D>::_setTargetLocation(T &owner)
         if( i_destinationHolder.HasDestination() && i_destinationHolder.GetDestinationDiff(x,y,z) < bothObjectSize )
             return;
     */
-
-    // Just a temp hack, GetContactPoint/GetClosePoint in above code use UpdateGroundPositionZ (in GetNearPoint)
-    // and then has the wrong z to use when creature try follow unit in the air.
-    if (owner.GetTypeId() == TYPEID_UNIT && ((Creature*)&owner)->CanFly())
-        z = i_target->GetPositionZ();
 
     Traveller<T> traveller(owner);
     i_destinationHolder.SetDestination(traveller, x, y, z);
@@ -199,7 +194,7 @@ bool TargetedMovementGeneratorMedium<T,D>::Update(T &owner, const uint32 & time_
 template<class T>
 void ChaseMovementGenerator<T>::_reachTarget(T &owner)
 {
-    if(owner.canReachWithAttack(this->i_target.getTarget()))
+    if (owner.CanReachWithMeleeAttack(this->i_target.getTarget()))
         owner.Attack(this->i_target.getTarget(),true);
 }
 

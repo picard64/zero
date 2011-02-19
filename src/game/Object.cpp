@@ -232,8 +232,8 @@ void Object::BuildMovementUpdate(ByteBuffer * data, uint8 updateFlags) const
             moveFlags |= MOVEFLAG_ONTRANSPORT;
         }
 
-        *data << uint32(moveFlags);
-        *data << uint32(getMSTime());
+        *data << uint32(moveFlags);                         // movement flags
+        *data << uint32(WorldTimer::getMSTime());           // time (in milliseconds)
     }
 
     if (updateFlags & UPDATEFLAG_HAS_POSITION)                     // 0x40
@@ -317,7 +317,7 @@ void Object::BuildMovementUpdate(ByteBuffer * data, uint8 updateFlags) const
     // 0x2
     if(updateFlags & UPDATEFLAG_TRANSPORT)
     {
-        *data << uint32(getMSTime());                       // ms time
+        *data << uint32(WorldTimer::getMSTime());                       // ms time
     }
 }
 
@@ -826,23 +826,22 @@ void WorldObject::Relocate(float x, float y, float z)
 
 uint32 WorldObject::GetZoneId() const
 {
-    return GetBaseMap()->GetZoneId(m_positionX, m_positionY, m_positionZ);
+    return GetTerrain()->GetZoneId(m_positionX, m_positionY, m_positionZ);
 }
 
 uint32 WorldObject::GetAreaId() const
 {
-    return GetBaseMap()->GetAreaId(m_positionX, m_positionY, m_positionZ);
+    return GetTerrain()->GetAreaId(m_positionX, m_positionY, m_positionZ);
 }
 
 void WorldObject::GetZoneAndAreaId(uint32& zoneid, uint32& areaid) const
 {
-    GetBaseMap()->GetZoneAndAreaId(zoneid, areaid, m_positionX, m_positionY, m_positionZ);
+    GetTerrain()->GetZoneAndAreaId(zoneid, areaid, m_positionX, m_positionY, m_positionZ);
 }
 
 InstanceData* WorldObject::GetInstanceData() const
 {
-    Map *map = GetMap();
-    return map->IsDungeon() ? ((InstanceMap*)map)->GetInstanceData() : NULL;
+    return GetMap()->GetInstanceData();
 }
 
                                                             //slow
@@ -1124,9 +1123,66 @@ void WorldObject::GetRandomPoint( float x, float y, float z, float distance, flo
 
 void WorldObject::UpdateGroundPositionZ(float x, float y, float &z) const
 {
-    float new_z = GetBaseMap()->GetHeight(x,y,z,true);
+    float new_z = GetTerrain()->GetHeight(x,y,z,true);
     if(new_z > INVALID_HEIGHT)
         z = new_z+ 0.05f;                                   // just to be sure that we are not a few pixel under the surface
+}
+
+void WorldObject::UpdateAllowedPositionZ(float x, float y, float &z) const
+{
+    switch (GetTypeId())
+    {
+        case TYPEID_UNIT:
+        {
+            // non fly unit don't must be in air
+            // non swim unit must be at ground (mostly speedup, because it don't must be in water and water level check less fast
+            if (!((Creature const*)this)->CanFly())
+            {
+                bool canSwim = ((Creature const*)this)->CanSwim();
+                float ground_z = z;
+                float max_z = canSwim
+                    ? GetTerrain()->GetWaterOrGroundLevel(x, y, z, &ground_z, !((Unit const*)this)->HasAuraType(SPELL_AURA_WATER_WALK))
+                    : ((ground_z = GetTerrain()->GetHeight(x, y, z, true)));
+                if (max_z > INVALID_HEIGHT)
+                {
+                    if (z > max_z)
+                        z = max_z;
+                    else if (z < ground_z)
+                        z = ground_z;
+                }
+            }
+            else
+            {
+                float ground_z = GetTerrain()->GetHeight(x, y, z, true);
+                if (z < ground_z)
+                    z = ground_z;
+            }
+            break;
+        }
+        case TYPEID_PLAYER:
+        {
+            // for server controlled moves playr work same as creature (but it can always swim)
+            {
+                float ground_z = z;
+                float max_z = GetTerrain()->GetWaterOrGroundLevel(x, y, z, &ground_z, !((Unit const*)this)->HasAuraType(SPELL_AURA_WATER_WALK));
+                if (max_z > INVALID_HEIGHT)
+                {
+                    if (z > max_z)
+                        z = max_z;
+                    else if (z < ground_z)
+                        z = ground_z;
+                }
+            }
+            break;
+        }
+        default:
+        {
+            float ground_z = GetTerrain()->GetHeight(x, y, z, true);
+            if(ground_z > INVALID_HEIGHT)
+                z = ground_z;
+            break;
+        }
+    }
 }
 
 bool WorldObject::IsPositionValid() const
@@ -1312,10 +1368,10 @@ void WorldObject::SetMap(Map * map)
     m_InstanceId = map->GetInstanceId();
 }
 
-Map const* WorldObject::GetBaseMap() const
+TerrainInfo const* WorldObject::GetTerrain() const
 {
     MANGOS_ASSERT(m_currMap);
-    return m_currMap->GetParent();
+    return m_currMap->GetTerrain();
 }
 
 void WorldObject::AddObjectToRemoveList()
@@ -1452,7 +1508,10 @@ void WorldObject::GetNearPoint(WorldObject const* searcher, float &x, float &y, 
     // if detection disabled, return first point
     if(!sWorld.getConfig(CONFIG_BOOL_DETECT_POS_COLLISION))
     {
-        UpdateGroundPositionZ(x,y,z);                       // update to LOS height if available
+        if (searcher)
+            searcher->UpdateAllowedPositionZ(x,y,z);        // update to LOS height if available
+        else
+            UpdateGroundPositionZ(x,y,z);
         return;
     }
 
@@ -1475,7 +1534,10 @@ void WorldObject::GetNearPoint(WorldObject const* searcher, float &x, float &y, 
     // maybe can just place in primary position
     if( selector.CheckOriginal() )
     {
-        UpdateGroundPositionZ(x,y,z);                       // update to LOS height if available
+        if (searcher)
+            searcher->UpdateAllowedPositionZ(x,y,z);        // update to LOS height if available
+        else
+            UpdateGroundPositionZ(x,y,z);
 
         if(IsWithinLOS(x,y,z))
             return;
@@ -1490,7 +1552,11 @@ void WorldObject::GetNearPoint(WorldObject const* searcher, float &x, float &y, 
     {
         GetNearPoint2D(x,y,distance2d,absAngle+angle);
         z = GetPositionZ();
-        UpdateGroundPositionZ(x,y,z);                       // update to LOS height if available
+
+        if (searcher)
+            searcher->UpdateAllowedPositionZ(x,y,z);        // update to LOS height if available
+        else
+            UpdateGroundPositionZ(x,y,z);
 
         if(IsWithinLOS(x,y,z))
             return;
@@ -1504,7 +1570,11 @@ void WorldObject::GetNearPoint(WorldObject const* searcher, float &x, float &y, 
     {
         GetNearPoint2D(x,y,distance2d,absAngle+angle);
         z = GetPositionZ();
-        UpdateGroundPositionZ(x,y,z);                       // update to LOS height if available
+
+        if (searcher)
+            searcher->UpdateAllowedPositionZ(x,y,z);        // update to LOS height if available
+        else
+            UpdateGroundPositionZ(x,y,z);
 
         if(IsWithinLOS(x,y,z))
             return;
@@ -1518,7 +1588,10 @@ void WorldObject::GetNearPoint(WorldObject const* searcher, float &x, float &y, 
         x = first_x;
         y = first_y;
 
-        UpdateGroundPositionZ(x,y,z);                       // update to LOS height if available
+        if (searcher)
+            searcher->UpdateAllowedPositionZ(x,y,z);        // update to LOS height if available
+        else
+            UpdateGroundPositionZ(x,y,z);
         return;
     }
 
@@ -1529,7 +1602,11 @@ void WorldObject::GetNearPoint(WorldObject const* searcher, float &x, float &y, 
         {
             GetNearPoint2D(x,y,distance2d,absAngle+angle);
             z = GetPositionZ();
-            UpdateGroundPositionZ(x,y,z);                   // update to LOS height if available
+
+            if (searcher)
+                searcher->UpdateAllowedPositionZ(x,y,z);        // update to LOS height if available
+            else
+                UpdateGroundPositionZ(x,y,z);
 
             if(IsWithinLOS(x,y,z))
                 return;
@@ -1544,7 +1621,11 @@ void WorldObject::GetNearPoint(WorldObject const* searcher, float &x, float &y, 
     {
         GetNearPoint2D(x,y,distance2d,absAngle+angle);
         z = GetPositionZ();
-        UpdateGroundPositionZ(x,y,z);                       // update to LOS height if available
+
+        if (searcher)
+            searcher->UpdateAllowedPositionZ(x,y,z);        // update to LOS height if available
+        else
+            UpdateGroundPositionZ(x,y,z);
 
         if(IsWithinLOS(x,y,z))
             return;
@@ -1554,7 +1635,10 @@ void WorldObject::GetNearPoint(WorldObject const* searcher, float &x, float &y, 
     x = first_x;
     y = first_y;
 
-    UpdateGroundPositionZ(x,y,z);                           // update to LOS height if available
+    if (searcher)
+        searcher->UpdateAllowedPositionZ(x,y,z);            // update to LOS height if available
+    else
+        UpdateGroundPositionZ(x,y,z);
 }
 
 void WorldObject::PlayDistanceSound( uint32 sound_id, Player* target /*= NULL*/ )

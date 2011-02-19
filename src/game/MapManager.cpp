@@ -24,16 +24,15 @@
 #include "Log.h"
 #include "Transports.h"
 #include "GridDefines.h"
-#include "MapInstanced.h"
 #include "DestinationHolderImp.h"
 #include "World.h"
 #include "CellImpl.h"
 #include "Corpse.h"
 #include "ObjectMgr.h"
 
-#define CLASS_LOCK MaNGOS::ClassLevelLockable<MapManager, ACE_Thread_Mutex>
+#define CLASS_LOCK MaNGOS::ClassLevelLockable<MapManager, ACE_Recursive_Thread_Mutex>
 INSTANTIATE_SINGLETON_2(MapManager, CLASS_LOCK);
-INSTANTIATE_CLASS_MUTEX(MapManager, ACE_Thread_Mutex);
+INSTANTIATE_CLASS_MUTEX(MapManager, ACE_Recursive_Thread_Mutex);
 
 MapManager::MapManager()
     : i_gridCleanUpDelay(sWorld.getConfig(CONFIG_UINT32_INTERVAL_GRIDCLEAN))
@@ -90,53 +89,67 @@ void MapManager::InitializeVisibilityDistanceInfo()
         (*iter).second->InitVisibilityDistance();
 }
 
-Map*
-MapManager::_createBaseMap(uint32 id)
-{
-    Map *m = _findMap(id);
-
-    if( m == NULL )
-    {
-        Guard guard(*this);
-
-        const MapEntry* entry = sMapStore.LookupEntry(id);
-        if (entry && entry->Instanceable())
-        {
-            m = new MapInstanced(id, i_gridCleanUpDelay);
-        }
-        else
-        {
-            m = new Map(id, i_gridCleanUpDelay, 0);
-        }
-        i_maps[id] = m;
-    }
-
-    MANGOS_ASSERT(m != NULL);
-    return m;
-}
-
 Map* MapManager::CreateMap(uint32 id, const WorldObject* obj)
 {
     MANGOS_ASSERT(obj);
     //if(!obj->IsInWorld()) sLog.outError("GetMap: called for map %d with object (typeid %d, guid %d, mapid %d, instanceid %d) who is not in world!", id, obj->GetTypeId(), obj->GetGUIDLow(), obj->GetMapId(), obj->GetInstanceId());
-    Map *m = _createBaseMap(id);
+    Guard _guard(*this);
 
-    if (m && (obj->GetTypeId() == TYPEID_PLAYER) && m->Instanceable())
-        m = ((MapInstanced*)m)->CreateInstance((Player*)obj);
+    Map * m = NULL;
+
+    const MapEntry* entry = sMapStore.LookupEntry(id);
+    if(!entry)
+        return NULL;
+
+    if(entry->Instanceable())
+    {
+        MANGOS_ASSERT(obj->GetTypeId() == TYPEID_PLAYER);
+        //create InstanceMap object
+        if(obj->GetTypeId() == TYPEID_PLAYER)
+            m = CreateInstance(id, (Player*)obj);
+    }
+    else
+    {
+        //create regular Continent map
+        m = FindMap(id);
+        if( m == NULL )
+        {
+            m = new Map(id, i_gridCleanUpDelay, 0);
+            //add map into container
+            i_maps[MapID(id)] = m;
+
+            // non-instanceable maps always expected have saved state
+            m->CreateInstanceData(true);
+        }
+    }
 
     return m;
 }
 
+Map* MapManager::CreateBgMap(uint32 mapid, BattleGround* bg)
+{
+    TerrainInfo * pData = sTerrainMgr.LoadTerrain(mapid);
+
+    Guard _guard(*this);
+    return CreateBattleGroundMap(mapid, sMapMgr.GenerateInstanceId(), bg);
+}
+
 Map* MapManager::FindMap(uint32 mapid, uint32 instanceId) const
 {
-    Map *map = _findMap(mapid);
-    if(!map)
+    Guard guard(*this);
+
+    MapMapType::const_iterator iter = i_maps.find(MapID(mapid, instanceId));
+    if(iter == i_maps.end())
         return NULL;
 
-    if(!map->Instanceable())
-        return instanceId == 0 ? map : NULL;
+    //this is a small workaround for transports
+    if(instanceId == 0 && iter->second->Instanceable())
+    {
+        assert(false);
+        return NULL;
+    }
 
-    return ((MapInstanced*)map)->FindMap(instanceId);
+    return iter->second;
 }
 
 /*
@@ -146,12 +159,14 @@ Map* MapManager::FindMap(uint32 mapid, uint32 instanceId) const
 bool MapManager::CanPlayerEnter(uint32 mapid, Player* player)
 {
     const MapEntry *entry = sMapStore.LookupEntry(mapid);
-    if(!entry) return false;
+    if(!entry)
+        return false;
+
     const char *mapName = entry->name[player->GetSession()->GetSessionDbcLocale()];
 
-    if(entry->map_type == MAP_INSTANCE || entry->map_type == MAP_RAID)
+    if(entry->IsDungeon())
     {
-        if (entry->map_type == MAP_RAID)
+        if (entry->IsRaid())
         {
             // GMs can avoid raid limitations
             if(!player->isGameMaster() && !sWorld.getConfig(CONFIG_BOOL_INSTANCE_IGNORE_RAID))
@@ -206,17 +221,27 @@ bool MapManager::CanPlayerEnter(uint32 mapid, Player* player)
             player->SendTransferAborted(GetId(), TRANSFER_ABORT_ZONE_IN_COMBAT);
             return(false);
         }*/
-        return true;
     }
-    else
-        return true;
+
+    return true;
 }
 
 void MapManager::DeleteInstance(uint32 mapid, uint32 instanceId)
 {
-    Map *m = _createBaseMap(mapid);
-    if (m && m->Instanceable())
-        ((MapInstanced*)m)->DestroyInstance(instanceId);
+    Guard _guard(*this);
+
+    MapMapType::iterator iter = i_maps.find(MapID(mapid, instanceId));
+    if(iter != i_maps.end())
+    {
+        Map * pMap = iter->second;
+        if (pMap->Instanceable())
+        {
+            i_maps.erase(iter);
+
+            pMap->UnloadAll(true);
+            delete pMap;
+        }
+    }
 }
 
 void
@@ -230,7 +255,27 @@ MapManager::Update(uint32 diff)
         iter->second->Update((uint32)i_timer.GetCurrent());
 
     for (TransportSet::iterator iter = m_Transports.begin(); iter != m_Transports.end(); ++iter)
-        (*iter)->Update((uint32)i_timer.GetCurrent());
+    {
+        WorldObject::UpdateHelper helper((*iter));
+        helper.Update((uint32)i_timer.GetCurrent());
+    }
+
+    //remove all maps which can be unloaded
+    MapMapType::iterator iter = i_maps.begin();
+    while(iter != i_maps.end())
+    {
+        Map * pMap = iter->second;
+        //check if map can be unloaded
+        if(pMap->CanUnload((uint32)i_timer.GetCurrent()))
+        {
+            pMap->UnloadAll(true);
+            delete pMap;
+
+            i_maps.erase(iter++);
+        }
+        else
+            ++iter;
+    }
 
     i_timer.SetCurrent(0);
 }
@@ -268,6 +313,8 @@ void MapManager::UnloadAll()
         delete i_maps.begin()->second;
         i_maps.erase(i_maps.begin());
     }
+
+    TerrainManager::Instance().UnloadAll();
 }
 
 void MapManager::InitMaxInstanceId()
@@ -288,10 +335,8 @@ uint32 MapManager::GetNumInstances()
     for(MapMapType::iterator itr = i_maps.begin(); itr != i_maps.end(); ++itr)
     {
         Map *map = itr->second;
-        if(!map->Instanceable()) continue;
-        MapInstanced::InstancedMaps &maps = ((MapInstanced *)map)->GetInstancedMaps();
-        for(MapInstanced::InstancedMaps::iterator mitr = maps.begin(); mitr != maps.end(); ++mitr)
-            if(mitr->second->IsDungeon()) ret++;
+        if(!map->IsDungeon()) continue;
+            ret += 1;
     }
     return ret;
 }
@@ -302,11 +347,99 @@ uint32 MapManager::GetNumPlayersInInstances()
     for(MapMapType::iterator itr = i_maps.begin(); itr != i_maps.end(); ++itr)
     {
         Map *map = itr->second;
-        if(!map->Instanceable()) continue;
-        MapInstanced::InstancedMaps &maps = ((MapInstanced *)map)->GetInstancedMaps();
-        for(MapInstanced::InstancedMaps::iterator mitr = maps.begin(); mitr != maps.end(); ++mitr)
-            if(mitr->second->IsDungeon())
-                ret += ((InstanceMap*)mitr->second)->GetPlayers().getSize();
+        if(!map->IsDungeon()) continue;
+            ret += map->GetPlayers().getSize();
     }
     return ret;
 }
+
+///// returns a new or existing Instance
+///// in case of battlegrounds it will only return an existing map, those maps are created by bg-system
+Map* MapManager::CreateInstance(uint32 id, Player * player)
+{
+    Map* map = NULL;
+    Map * pNewMap = NULL;
+    uint32 NewInstanceId = 0;                                   // instanceId of the resulting map
+    const MapEntry* entry = sMapStore.LookupEntry(id);
+
+    if(entry->IsBattleGround())
+    {
+        // find existing bg map for player
+        NewInstanceId = player->GetBattleGroundId();
+        MANGOS_ASSERT(NewInstanceId);
+        map = FindMap(id, NewInstanceId);
+        MANGOS_ASSERT(map);
+    }
+    else if (InstanceSave* pSave = player->GetBoundInstanceSaveForSelfOrGroup(id))
+    {
+        // solo/perm/group
+        NewInstanceId = pSave->GetInstanceId();
+        map = FindMap(id, NewInstanceId);
+        // it is possible that the save exists but the map doesn't
+        if (!map)
+            pNewMap = CreateInstanceMap(id, NewInstanceId, pSave);
+    }
+    else
+    {
+        // if no instanceId via group members or instance saves is found
+        // the instance will be created for the first time
+        NewInstanceId = GenerateInstanceId();
+
+        pNewMap = CreateInstanceMap(id, NewInstanceId);
+    }
+
+    //add a new map object into the registry
+    if(pNewMap)
+    {
+        i_maps[MapID(id, NewInstanceId)] = pNewMap;
+        map = pNewMap;
+    }
+
+    return map;
+}
+
+InstanceMap* MapManager::CreateInstanceMap(uint32 id, uint32 InstanceId, InstanceSave *save)
+{
+    // make sure we have a valid map id
+    const MapEntry* entry = sMapStore.LookupEntry(id);
+    if (!entry)
+    {
+        sLog.outError("CreateInstanceMap: no entry for map %d", id);
+        MANGOS_ASSERT(false);
+    }
+    if (!ObjectMgr::GetInstanceTemplate(id))
+    {
+        sLog.outError("CreateInstanceMap: no instance template for map %d", id);
+        MANGOS_ASSERT(false);
+    }
+
+    DEBUG_LOG("MapInstanced::CreateInstanceMap: %s map instance %d for %d created", save?"":"new ", InstanceId, id);
+
+    InstanceMap *map = new InstanceMap(id, i_gridCleanUpDelay, InstanceId);
+    MANGOS_ASSERT(map->IsDungeon());
+
+    // Dungeons can have saved instance data
+    bool load_data = save != NULL;
+    map->CreateInstanceData(load_data);
+
+    return map;
+}
+
+BattleGroundMap* MapManager::CreateBattleGroundMap(uint32 id, uint32 InstanceId, BattleGround* bg)
+{
+    DEBUG_LOG("MapInstanced::CreateBattleGroundMap: instance:%d for map:%d and bgType:%d created.", InstanceId, id, bg->GetTypeID());
+
+    BattleGroundMap *map = new BattleGroundMap(id, i_gridCleanUpDelay, InstanceId);
+    MANGOS_ASSERT(map->IsBattleGround());
+    map->SetBG(bg);
+    bg->SetBgMap(map);
+
+    //add map into map container
+    i_maps[MapID(id, InstanceId)] = map;
+
+    // BGs/Arenas not have saved instance data
+    map->CreateInstanceData(false);
+
+    return map;
+}
+

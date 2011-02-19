@@ -385,7 +385,7 @@ uint32 Creature::ChooseDisplayId(const CreatureInfo *cinfo, const CreatureData *
     return display_id;
 }
 
-void Creature::Update(uint32 diff)
+void Creature::Update(uint32 update_diff, uint32 diff)
 {
     if (m_needNotify)
     {
@@ -415,6 +415,9 @@ void Creature::Update(uint32 diff)
                 lootForPickPocketed = false;
                 lootForBody         = false;
                 lootForSkin         = false;
+
+                // Clear possible auras having IsDeathPersistent() attribute
+                RemoveAllAuras();
 
                 if(m_originalEntry != GetEntry())
                 {
@@ -451,7 +454,7 @@ void Creature::Update(uint32 diff)
             if (m_isDeadByDefault)
                 break;
 
-            if (m_corpseDecayTimer <= diff)
+            if (m_corpseDecayTimer <= update_diff)
             {
                 // since pool system can fail to roll unspawned object, this one can remain spawned, so must set respawn nevertheless
                 uint16 poolid = GetDBTableGUIDLow() ? sPoolMgr.IsPartOfAPool<Creature>(GetDBTableGUIDLow()) : 0;
@@ -466,11 +469,11 @@ void Creature::Update(uint32 diff)
             }
             else
             {
-                m_corpseDecayTimer -= diff;
+                m_corpseDecayTimer -= update_diff;
                 if (m_groupLootId)
                 {
-                    if(diff < m_groupLootTimer)
-                        m_groupLootTimer -= diff;
+                    if(update_diff < m_groupLootTimer)
+                        m_groupLootTimer -= update_diff;
                     else
                         StopGroupLoot();
                 }
@@ -482,7 +485,7 @@ void Creature::Update(uint32 diff)
         {
             if (m_isDeadByDefault)
             {
-                if (m_corpseDecayTimer <= diff)
+                if (m_corpseDecayTimer <= update_diff)
                 {
                     // since pool system can fail to roll unspawned object, this one can remain spawned, so must set respawn nevertheless
                     uint16 poolid = GetDBTableGUIDLow() ? sPoolMgr.IsPartOfAPool<Creature>(GetDBTableGUIDLow()) : 0;
@@ -500,11 +503,11 @@ void Creature::Update(uint32 diff)
                 }
                 else
                 {
-                    m_corpseDecayTimer -= diff;
+                    m_corpseDecayTimer -= update_diff;
                 }
             }
 
-            Unit::Update( diff );
+            Unit::Update( update_diff, diff );
 
             // creature can be dead after Unit::Update call
             // CORPSE/DEAD state will processed at next tick (in other case death timer will be updated unexpectedly)
@@ -517,7 +520,7 @@ void Creature::Update(uint32 diff)
                 {
                     // do not allow the AI to be changed during update
                     m_AI_locked = true;
-                    i_AI->UpdateAI(diff);
+                    AI()->UpdateAI(diff);   // AI not react good at real update delays (while freeze in non-active part of map)
                     m_AI_locked = false;
                 }
             }
@@ -528,10 +531,10 @@ void Creature::Update(uint32 diff)
                 break;
             if(m_regenTimer > 0)
             {
-                if(diff >= m_regenTimer)
+                if(update_diff >= m_regenTimer)
                     m_regenTimer = 0;
                 else
-                    m_regenTimer -= diff;
+                    m_regenTimer -= update_diff;
             }
             if (m_regenTimer != 0)
                 break;
@@ -682,8 +685,8 @@ bool Creature::Create(uint32 guidlow, Map *map, uint32 Entry, Team team, const C
         //Notify the map's instance data.
         //Only works if you create the object in it, not if it is moves to that map.
         //Normally non-players do not teleport to other maps.
-        if(map->IsDungeon() && ((InstanceMap*)map)->GetInstanceData())
-            ((InstanceMap*)map)->GetInstanceData()->OnCreatureCreate(this);
+        if (InstanceData* iData = map->GetInstanceData())
+            iData->OnCreatureCreate(this);
 
         switch (GetCreatureInfo()->rank)
         {
@@ -1209,7 +1212,7 @@ bool Creature::LoadFromDB(uint32 guidlow, Map *map)
         m_deathState = DEAD;
         if(CanFly())
         {
-            float tz = GetMap()->GetHeight(data->posX, data->posY, data->posZ, false);
+            float tz = GetTerrain()->GetHeight(data->posX, data->posY, data->posZ, false);
             if(data->posZ - tz > 0.1)
                 Relocate(data->posX, data->posY, tz);
         }
@@ -1407,12 +1410,13 @@ bool Creature::FallGround()
         return false;
 
     // use larger distance for vmap height search than in most other cases
-    float tz = GetMap()->GetHeight(GetPositionX(), GetPositionY(), GetPositionZ(), true, MAX_FALL_DISTANCE);
+    float tz = GetTerrain()->GetHeight(GetPositionX(), GetPositionY(), GetPositionZ(), true, MAX_FALL_DISTANCE);
 
-    if (tz < INVALID_HEIGHT)
+    if (tz <= INVALID_HEIGHT)
     {
         DEBUG_LOG("FallGround: creature %u at map %u (x: %f, y: %f, z: %f), not able to retrive a proper GetHeight (z: %f).",
             GetEntry(), GetMap()->GetId(), GetPositionX(), GetPositionX(), GetPositionZ(), tz);
+        return false;
     }
 
     float Z = fabs(GetPositionZ() - tz);
@@ -2293,4 +2297,19 @@ void Creature::ApplyGameEventSpells(GameEventCreatureData const* eventData, bool
 
     if (cast_spell)
         CastSpell(this, cast_spell, true);
+}
+
+void Creature::FillGuidsListFromThreatList( std::vector<ObjectGuid>& guids, uint32 maxamount /*= 0*/ )
+{
+    if (!CanHaveThreatList())
+        return;
+
+    ThreatList const& threats = getThreatManager().getThreatList();
+
+    maxamount = maxamount > 0 ? std::min(maxamount,uint32(threats.size())) : threats.size();
+
+    guids.reserve(guids.size() + maxamount);
+
+    for (ThreatList::const_iterator itr = threats.begin(); maxamount && itr != threats.end(); ++itr, --maxamount)
+        guids.push_back((*itr)->getUnitGuid());
 }

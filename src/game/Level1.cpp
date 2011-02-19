@@ -293,7 +293,7 @@ bool ChatHandler::HandleGPSCommand(char* args)
         zone_y = 0;
     }
 
-    Map const *map = obj->GetMap();
+    TerrainInfo const *map = obj->GetTerrain();
     float ground_z = map->GetHeight(obj->GetPositionX(), obj->GetPositionY(), MAX_HEIGHT);
     float floor_z = map->GetHeight(obj->GetPositionX(), obj->GetPositionY(), obj->GetPositionZ());
 
@@ -1124,6 +1124,7 @@ bool ChatHandler::HandleModifyScaleCommand(char* args)
     }
 
     target->SetObjectScale(Scale);
+    target->UpdateModelData();
 
     return true;
 }
@@ -1695,9 +1696,8 @@ bool ChatHandler::HandleTeleNameCommand(char* args)
         std::string nameLink = playerLink(target_name);
 
         PSendSysMessage(LANG_TELEPORTING_TO, nameLink.c_str(), GetMangosString(LANG_OFFLINE), tele->name.c_str());
-        Player::SavePositionInDB(target_guid, tele->mapId,
-            tele->position_x, tele->position_y, tele->position_z, tele->orientation,
-            sMapMgr.GetZoneId(tele->mapId,tele->position_x,tele->position_y,tele->position_z));
+        Player::SavePositionInDB(target_guid, tele->mapId,tele->position_x,tele->position_y,tele->position_z,tele->orientation,
+            sTerrainMgr.GetZoneId(tele->mapId,tele->position_x,tele->position_y,tele->position_z));
     }
 
     return true;
@@ -1901,8 +1901,8 @@ bool ChatHandler::HandleGoHelper( Player* player, uint32 mapid, float x, float y
             return false;
         }
 
-        Map const *map = sMapMgr.CreateBaseMap(mapid);
-        z = std::max(map->GetHeight(x, y, MAX_HEIGHT), map->GetWaterLevel(x, y));
+        TerrainInfo const *map = sTerrainMgr.LoadTerrain(mapid);
+        z = map->GetWaterOrGroundLevel(x, y, MAX_HEIGHT);
     }
 
     // stop flight if need
@@ -2111,6 +2111,20 @@ bool ChatHandler::HandleModifyDrunkCommand(char* args)
     uint16 drunkMod = drunklevel * 0xFFFF / 100;
 
     m_session->GetPlayer()->SetDrunkValue(drunkMod);
+
+    return true;
+}
+
+bool ChatHandler::HandleSetViewCommand(char* /*args*/)
+{
+    if (Unit* unit = getSelectedUnit())
+        m_session->GetPlayer()->GetCamera().SetView(unit);
+    else
+    {
+        PSendSysMessage(LANG_SELECT_CHAR_OR_CREATURE);
+        SetSentErrorMessage(true);
+        return false;
+    }
 
     return true;
 }
