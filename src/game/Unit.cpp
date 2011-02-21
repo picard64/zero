@@ -42,7 +42,7 @@
 #include "Totem.h"
 #include "BattleGround.h"
 #include "InstanceData.h"
-#include "InstanceSaveMgr.h"
+#include "MapPersistentStateMgr.h"
 #include "GridNotifiersImpl.h"
 #include "CellImpl.h"
 #include "Path.h"
@@ -820,16 +820,16 @@ uint32 Unit::DealDamage(Unit *pVictim, uint32 damage, CleanDamage const* cleanDa
                     if(m->IsRaid())
                     {
                         if(cVictim->GetCreatureInfo()->flags_extra & CREATURE_FLAG_EXTRA_INSTANCE_BIND)
-                            ((InstanceMap *)m)->PermBindAllPlayers(creditedPlayer);
+                            ((DungeonMap *)m)->PermBindAllPlayers(creditedPlayer);
                     }
                     else
                     {
+                        DungeonPersistentState* save = ((DungeonMap*)m)->GetPersistanceState();
                         // the reset time is set but not added to the scheduler
                         // until the players leave the instance
                         time_t resettime = cVictim->GetRespawnTimeEx() + 2 * HOUR;
-                        if (InstanceSave *save = m->GetInstanceSave())
-                            if (save->GetResetTime() < resettime)
-                                save->SetResetTime(resettime);
+                        if (save->GetResetTime() < resettime)
+                            save->SetResetTime(resettime);
                     }
                 }
             }
@@ -7299,11 +7299,6 @@ bool Unit::isVisibleForOrDetect(Unit const* u, WorldObject const* viewPoint, boo
     {
         // use object grey distance for all (only see objects any way)
         if (!IsWithinDistInMap(viewPoint,World::GetMaxVisibleDistanceInFlight()+(inVisibleList ? World::GetVisibleObjectGreyDistance() : 0.0f), is3dDistance))
-            return false;
-    }
-    else if(!isAlive())                                     // distance for show body
-    {
-        if (!IsWithinDistInMap(viewPoint,World::GetMaxVisibleDistanceForObject()+(inVisibleList ? World::GetVisibleObjectGreyDistance() : 0.0f), is3dDistance))
             return false;
     }
     else if(!at_same_transport)                             // distance for show player/pet/creature (no transport case)

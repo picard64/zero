@@ -45,8 +45,10 @@ class Unit;
 class WorldPacket;
 class InstanceData;
 class Group;
-class InstanceSave;
-class BattleGround;
+class MapPersistentState;
+class WorldPersistentState;
+class DungeonPersistentState;
+class BattleGroundPersistentState;
 struct ScriptInfo;
 struct ScriptAction;
 class BattleGround;
@@ -93,8 +95,10 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
     friend class MapReference;
     friend class ObjectGridLoader;
     friend class ObjectWorldLoader;
-    public:
+    protected:
         Map(uint32 id, time_t, uint32 InstanceId);
+
+    public:
         virtual ~Map();
 
         // currently unused for normal maps
@@ -175,7 +179,8 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         bool IsRaid() const { return i_mapEntry && i_mapEntry->IsRaid(); }
         bool IsBattleGround() const { return i_mapEntry && i_mapEntry->IsBattleGround(); }
 
-        InstanceSave* GetInstanceSave() const { return m_instanceSave; }
+        // can't be NULL for loaded map
+        MapPersistentState* GetPersistentState() const { return m_persistentState; }
 
         void AddObjectToRemoveList(WorldObject *obj);
 
@@ -281,7 +286,7 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         uint32 i_InstanceId;
         uint32 m_unloadTimer;
         float m_VisibleDistance;
-        InstanceSave* m_instanceSave;                       // can be NULL for non dungeons...
+        MapPersistentState* m_persistentState;
 
         MapRefManager m_mapRefManager;
         MapRefManager::iterator m_mapRefIter;
@@ -308,6 +313,8 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         uint32 i_script_id;
 
         // Map local low guid counters
+        ObjectGuidGenerator<HIGHGUID_UNIT> m_CreatureGuids;
+        ObjectGuidGenerator<HIGHGUID_GAMEOBJECT> m_GameObjectGuids;
         ObjectGuidGenerator<HIGHGUID_DYNAMICOBJECT> m_DynObjectGuids;
         ObjectGuidGenerator<HIGHGUID_PET> m_PetGuids;
 
@@ -322,11 +329,25 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
             void RemoveFromGrid(T*, NGridType *, Cell const&);
 };
 
-class MANGOS_DLL_SPEC InstanceMap : public Map
+class MANGOS_DLL_SPEC WorldMap : public Map
 {
+    private:
+        using Map::GetPersistentState;                      // hide in subclass for overwrite
     public:
-        InstanceMap(uint32 id, time_t, uint32 InstanceId);
-        ~InstanceMap();
+        WorldMap(uint32 id, time_t expiry) : Map(id, expiry, 0) {}
+        ~WorldMap() {}
+
+        // can't be NULL for loaded map
+        WorldPersistentState* GetPersistanceState() const;
+};
+
+class MANGOS_DLL_SPEC DungeonMap : public Map
+{
+    private:
+        using Map::GetPersistentState;                      // hide in subclass for overwrite
+    public:
+        DungeonMap(uint32 id, time_t, uint32 InstanceId);
+        ~DungeonMap();
         bool Add(Player *);
         void Remove(Player *, bool);
         void Update(const uint32&);
@@ -338,6 +359,9 @@ class MANGOS_DLL_SPEC InstanceMap : public Map
         void SetResetSchedule(bool on);
         uint32 GetMaxPlayers() const;
 
+        // can't be NULL for loaded map
+        DungeonPersistentState* GetPersistanceState() const;
+
         virtual void InitVisibilityDistance();
     private:
         bool m_resetAfterUnload;
@@ -346,6 +370,8 @@ class MANGOS_DLL_SPEC InstanceMap : public Map
 
 class MANGOS_DLL_SPEC BattleGroundMap : public Map
 {
+    private:
+        using Map::GetPersistentState;                      // hide in subclass for overwrite
     public:
         BattleGroundMap(uint32 id, time_t, uint32 InstanceId);
         ~BattleGroundMap();
@@ -360,6 +386,10 @@ class MANGOS_DLL_SPEC BattleGroundMap : public Map
         virtual void InitVisibilityDistance();
         BattleGround* GetBG() { return m_bg; }
         void SetBG(BattleGround* bg) { m_bg = bg; }
+
+        // can't be NULL for loaded map
+        BattleGroundPersistentState* GetPersistanceState() const;
+
     private:
         BattleGround* m_bg;
 };

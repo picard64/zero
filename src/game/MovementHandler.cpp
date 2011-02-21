@@ -28,7 +28,7 @@
 #include "Transports.h"
 #include "BattleGround.h"
 #include "WaypointMovementGenerator.h"
-#include "InstanceSaveMgr.h"
+#include "MapPersistentStateMgr.h"
 #include "ObjectMgr.h"
 
 void WorldSession::HandleMoveWorldportAckOpcode( WorldPacket & /*recv_data*/ )
@@ -181,10 +181,10 @@ void WorldSession::HandleMoveWorldportAckOpcode()
 
     if(mEntry->IsRaid() && mInstance)
     {
-        if (time_t timeReset = sInstanceSaveMgr.GetScheduler().GetResetTimeFor(GetPlayer()->GetMapId()))
+        if (time_t timeReset = sMapPersistentStateMgr.GetScheduler().GetResetTimeFor(mEntry->MapID))
         {
             uint32 timeleft = uint32(timeReset - time(NULL));
-            GetPlayer()->SendInstanceResetWarning(GetPlayer()->GetMapId(), timeleft);
+            GetPlayer()->SendInstanceResetWarning(mEntry->MapID, timeleft);
         }
     }
 

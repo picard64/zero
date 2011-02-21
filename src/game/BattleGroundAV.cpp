@@ -53,7 +53,7 @@ void BattleGroundAV::HandleKillUnit(Creature *creature, Player *killer)
     DEBUG_LOG("BattleGroundAV: HandleKillUnit %i", creature->GetEntry());
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
-    uint8 event1 = (sBattleGroundMgr.GetCreatureEventIndex(creature->GetDBTableGUIDLow())).event1;
+    uint8 event1 = (sBattleGroundMgr.GetCreatureEventIndex(creature->GetGUIDLow())).event1;
     if (event1 == BG_EVENT_NONE)
         return;
     switch(event1)
@@ -289,7 +289,7 @@ void BattleGroundAV::AddPlayer(Player *plr)
     BattleGround::AddPlayer(plr);
     // create score and add it to map, default values are set in constructor
     BattleGroundAVScore* sc = new BattleGroundAVScore;
-    m_PlayerScores[plr->GetGUID()] = sc;
+    m_PlayerScores[plr->GetObjectGuid()] = sc;
 }
 
 void BattleGroundAV::EndBattleGround(Team winner)
@@ -349,7 +349,7 @@ void BattleGroundAV::EndBattleGround(Team winner)
     BattleGround::EndBattleGround(winner);
 }
 
-void BattleGroundAV::RemovePlayer(Player* /*plr*/,uint64 /*guid*/)
+void BattleGroundAV::RemovePlayer(Player* /*plr*/, ObjectGuid /*guid*/)
 {
 }
 
@@ -389,7 +389,7 @@ void BattleGroundAV::HandleAreaTrigger(Player *Source, uint32 Trigger)
 void BattleGroundAV::UpdatePlayerScore(Player* Source, uint32 type, uint32 value)
 {
 
-    BattleGroundScoreMap::iterator itr = m_PlayerScores.find(Source->GetGUID());
+    BattleGroundScoreMap::iterator itr = m_PlayerScores.find(Source->GetObjectGuid());
     if(itr == m_PlayerScores.end())                         // player not found...
         return;
 
@@ -514,11 +514,11 @@ void BattleGroundAV::EventPlayerClickedOnFlag(Player *source, GameObject* target
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
     DEBUG_LOG("BattleGroundAV: using gameobject %i", target_obj->GetEntry());
-    uint8 event = (sBattleGroundMgr.GetGameObjectEventIndex(target_obj->GetDBTableGUIDLow())).event1;
+    uint8 event = (sBattleGroundMgr.GetGameObjectEventIndex(target_obj->GetGUIDLow())).event1;
     if (event >= BG_AV_NODES_MAX)                           // not a node
         return;
     BG_AV_Nodes node = BG_AV_Nodes(event);
-    switch ((sBattleGroundMgr.GetGameObjectEventIndex(target_obj->GetDBTableGUIDLow())).event2 % BG_AV_MAX_STATES)
+    switch ((sBattleGroundMgr.GetGameObjectEventIndex(target_obj->GetGUIDLow())).event2 % BG_AV_MAX_STATES)
     {
         case POINT_CONTROLLED:
             EventPlayerAssaultsPoint(source, node);

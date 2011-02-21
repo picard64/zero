@@ -56,7 +56,7 @@
 #include "Database/DatabaseImpl.h"
 #include "GridNotifiersImpl.h"
 #include "CellImpl.h"
-#include "InstanceSaveMgr.h"
+#include "MapPersistentStateMgr.h"
 #include "WaypointManager.h"
 #include "GMTicketMgr.h"
 #include "Util.h"
@@ -72,7 +72,6 @@ volatile uint32 World::m_worldLoopCounter = 0;
 float World::m_MaxVisibleDistanceOnContinents = DEFAULT_VISIBILITY_DISTANCE;
 float World::m_MaxVisibleDistanceInInstances  = DEFAULT_VISIBILITY_INSTANCE;
 float World::m_MaxVisibleDistanceInBG         = DEFAULT_VISIBILITY_BG;
-float World::m_MaxVisibleDistanceForObject    = DEFAULT_VISIBILITY_DISTANCE;
 
 float World::m_MaxVisibleDistanceInFlight     = DEFAULT_VISIBILITY_DISTANCE;
 float World::m_VisibleUnitGreyDistance        = 0;
@@ -753,17 +752,6 @@ void World::LoadConfigSettings(bool reload)
         m_MaxVisibleDistanceInBG = MAX_VISIBILITY_DISTANCE - m_VisibleUnitGreyDistance;
     }
 
-    m_MaxVisibleDistanceForObject    = sConfig.GetFloatDefault("Visibility.Distance.Object",   DEFAULT_VISIBILITY_DISTANCE);
-    if(m_MaxVisibleDistanceForObject < INTERACTION_DISTANCE)
-    {
-        sLog.outError("Visibility.Distance.Object can't be less max aggro radius %f",float(INTERACTION_DISTANCE));
-        m_MaxVisibleDistanceForObject = INTERACTION_DISTANCE;
-    }
-    else if(m_MaxVisibleDistanceForObject + m_VisibleObjectGreyDistance >  MAX_VISIBILITY_DISTANCE)
-    {
-        sLog.outError("Visibility.Distance.Object can't be greater %f",MAX_VISIBILITY_DISTANCE-m_VisibleObjectGreyDistance);
-        m_MaxVisibleDistanceForObject = MAX_VISIBILITY_DISTANCE - m_VisibleObjectGreyDistance;
-    }
     m_MaxVisibleDistanceInFlight    = sConfig.GetFloatDefault("Visibility.Distance.InFlight",      DEFAULT_VISIBILITY_DISTANCE);
     if(m_MaxVisibleDistanceInFlight + m_VisibleObjectGreyDistance > MAX_VISIBILITY_DISTANCE)
     {
@@ -875,10 +863,10 @@ void World::SetInitialWorldSettings()
 
     ///- Clean up and pack instances
     sLog.outString( "Cleaning up instances..." );
-    sInstanceSaveMgr.CleanupInstances();                // must be called before `creature_respawn`/`gameobject_respawn` tables
+    sMapPersistentStateMgr.CleanupInstances();              // must be called before `creature_respawn`/`gameobject_respawn` tables
 
     sLog.outString( "Packing instances..." );
-    sInstanceSaveMgr.PackInstances();
+    sMapPersistentStateMgr.PackInstances();
 
     sLog.outString( "Packing groups..." );
     sObjectMgr.PackGroupIds();                              // must be after CleanupInstances
@@ -971,14 +959,8 @@ void World::SetInitialWorldSettings()
     sLog.outString( ">>> Creature Addon Data loaded" );
     sLog.outString();
 
-    sLog.outString( "Loading Creature Respawn Data..." );   // must be after PackInstances()
-    sObjectMgr.LoadCreatureRespawnTimes();
-
     sLog.outString( "Loading Gameobject Data..." );
     sObjectMgr.LoadGameobjects();
-
-    sLog.outString( "Loading Gameobject Respawn Data..." ); // must be after PackInstances()
-    sObjectMgr.LoadGameobjectRespawnTimes();
 
     sLog.outString( "Loading Objects Pooling Data...");
     sPoolMgr.LoadFromDB();
@@ -1000,6 +982,15 @@ void World::SetInitialWorldSettings()
     sGameEventMgr.LoadFromDB();
     sLog.outString( ">>> Game Event Data loaded" );
     sLog.outString();
+
+    sLog.outString( "Creating map persistent states for non-instanceable maps..." );   // must be after PackInstances(), LoadCreatures(), sPoolMgr.LoadFromDB(), sGameEventMgr.LoadFromDB();
+    sMapPersistentStateMgr.InitWorldMaps();
+
+    sLog.outString( "Loading Creature Respawn Data..." );   // must be after LoadCreatures(), and sMapPersistentStateMgr.InitWorldMaps()
+    sMapPersistentStateMgr.LoadCreatureRespawnTimes();
+
+    sLog.outString( "Loading Gameobject Respawn Data..." ); // must be after LoadGameobjects(), and sMapPersistentStateMgr.InitWorldMaps()
+    sMapPersistentStateMgr.LoadGameobjectRespawnTimes();
 
     sLog.outString( "Loading SpellArea Data..." );          // must be after quest load
     sSpellMgr.LoadSpellAreas();
@@ -1237,9 +1228,6 @@ void World::SetInitialWorldSettings()
     sLog.outString("Deleting expired bans..." );
     LoginDatabase.Execute("DELETE FROM ip_banned WHERE unbandate<=UNIX_TIMESTAMP() AND unbandate<>bandate");
 
-    sLog.outString("Starting objects Pooling system..." );
-    sPoolMgr.Initialize();
-
     sLog.outString("Starting server Maintenance system..." );
     InitServerMaintenanceCheck();
 
@@ -1418,7 +1406,7 @@ void World::Update(uint32 diff)
     sMapMgr.RemoveAllObjectsInRemoveList();
 
     // update the instance reset times
-    sInstanceSaveMgr.Update();
+    sMapPersistentStateMgr.Update();
 
     if (m_MaintenanceTimeChecker < diff)
     {

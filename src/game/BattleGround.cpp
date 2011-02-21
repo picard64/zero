@@ -196,7 +196,7 @@ template<class Do>
 void BattleGround::BroadcastWorker(Do& _do)
 {
     for(BattleGroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
-        if (Player *plr = ObjectAccessor::FindPlayer(ObjectGuid(HIGHGUID_PLAYER, itr->first)))
+        if (Player *plr = ObjectAccessor::FindPlayer(itr->first))
             _do(plr);
 }
 
@@ -269,16 +269,6 @@ BattleGround::~BattleGround()
     int size = m_BgObjects.size();
     for(int i = 0; i < size; ++i)
         DelObject(i);
-
-    if (GetInstanceID())                                    // not spam by useless queries in case BG templates
-    {
-        // delete creature and go respawn times
-        CharacterDatabase.PExecute("DELETE FROM creature_respawn WHERE instance = '%u'", GetInstanceID());
-        CharacterDatabase.PExecute("DELETE FROM gameobject_respawn WHERE instance = '%u'", GetInstanceID());
-        // delete instance from db
-        CharacterDatabase.PExecute("DELETE FROM instance WHERE id = '%u'",GetInstanceID());
-        // remove from battlegrounds
-    }
 
     sBattleGroundMgr.RemoveBattleGround(GetInstanceID(), GetTypeID());
     sBattleGroundMgr.DeleteClientVisibleInstanceId(GetTypeID(), GetBracketId(), GetClientInstanceID());
@@ -423,7 +413,6 @@ void BattleGround::Update(uint32 diff)
             SetStatus(STATUS_IN_PROGRESS);
             SetStartDelayTime(m_StartDelayTimes[BG_STARTING_EVENT_FOURTH]);
 
-            //remove preparation
             {
 
                 PlaySoundToAll(SOUND_BG_START);
@@ -479,11 +468,11 @@ void BattleGround::SendPacketToAll(WorldPacket *packet)
     {
         if (itr->second.OfflineRemoveTime)
             continue;
-        Player *plr = sObjectMgr.GetPlayer(itr->first);
-        if (plr)
+
+        if (Player *plr = sObjectMgr.GetPlayer(itr->first))
             plr->GetSession()->SendPacket(packet);
         else
-            sLog.outError("BattleGround:SendPacketToAll: Player (GUID: %u) not found!", GUID_LOPART(itr->first));
+            sLog.outError("BattleGround:SendPacketToAll: %s not found!", itr->first.GetString().c_str());
     }
 }
 
@@ -493,10 +482,11 @@ void BattleGround::SendPacketToTeam(Team teamId, WorldPacket *packet, Player *se
     {
         if (itr->second.OfflineRemoveTime)
             continue;
+
         Player *plr = sObjectMgr.GetPlayer(itr->first);
         if (!plr)
         {
-            sLog.outError("BattleGround:SendPacketToTeam: Player (GUID: %u) not found!", GUID_LOPART(itr->first));
+            sLog.outError("BattleGround:SendPacketToTeam: %s not found!", itr->first.GetString().c_str());
             continue;
         }
 
@@ -526,11 +516,11 @@ void BattleGround::PlaySoundToTeam(uint32 SoundID, Team teamId)
     {
         if (itr->second.OfflineRemoveTime)
             continue;
-        Player *plr = sObjectMgr.GetPlayer(itr->first);
 
+        Player *plr = sObjectMgr.GetPlayer(itr->first);
         if (!plr)
         {
-            sLog.outError("BattleGround:PlaySoundToTeam: Player (GUID: %u) not found!", GUID_LOPART(itr->first));
+            sLog.outError("BattleGround:PlaySoundToTeam: %s not found!", itr->first.GetString().c_str());
             continue;
         }
 
@@ -551,11 +541,12 @@ void BattleGround::CastSpellOnTeam(uint32 SpellID, Team teamId)
     {
         if (itr->second.OfflineRemoveTime)
             continue;
+
         Player *plr = sObjectMgr.GetPlayer(itr->first);
 
         if (!plr)
         {
-            sLog.outError("BattleGround:CastSpellOnTeam: Player (GUID: %u) not found!", GUID_LOPART(itr->first));
+            sLog.outError("BattleGround:CastSpellOnTeam: %s not found!", itr->first.GetString().c_str());
             continue;
         }
 
@@ -573,11 +564,12 @@ void BattleGround::RewardHonorToTeam(uint32 Honor, Team teamId)
     {
         if (itr->second.OfflineRemoveTime)
             continue;
+
         Player *plr = sObjectMgr.GetPlayer(itr->first);
 
         if (!plr)
         {
-            sLog.outError("BattleGround:RewardHonorToTeam: Player (GUID: %u) not found!", GUID_LOPART(itr->first));
+            sLog.outError("BattleGround:RewardHonorToTeam: %s not found!", itr->first.GetString().c_str());
             continue;
         }
 
@@ -600,11 +592,12 @@ void BattleGround::RewardReputationToTeam(uint32 faction_id, uint32 Reputation, 
     {
         if (itr->second.OfflineRemoveTime)
             continue;
+
         Player *plr = sObjectMgr.GetPlayer(itr->first);
 
         if (!plr)
         {
-            sLog.outError("BattleGround:RewardReputationToTeam: Player (GUID: %u) not found!", GUID_LOPART(itr->first));
+            sLog.outError("BattleGround:RewardReputationToTeam: %s not found!", itr->first.GetString().c_str());
             continue;
         }
 
@@ -674,7 +667,7 @@ void BattleGround::EndBattleGround(Team winner)
         Player *plr = sObjectMgr.GetPlayer(itr->first);
         if (!plr)
         {
-            sLog.outError("BattleGround:EndBattleGround Player (GUID: %u) not found!", GUID_LOPART(itr->first));
+            sLog.outError("BattleGround:EndBattleGround %s not found!", itr->first.GetString().c_str());
             continue;
         }
 
@@ -860,7 +853,7 @@ void BattleGround::BlockMovement(Player *plr)
     plr->SetClientControl(plr, 0);                          // movement disabled NOTE: the effect will be automatically removed by client when the player is teleported from the battleground, so no need to send with uint8(1) in RemovePlayerAtLeave()
 }
 
-void BattleGround::RemovePlayerAtLeave(uint64 guid, bool Transport, bool SendPacket)
+void BattleGround::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool SendPacket)
 {
     Team team = GetPlayerTeam(guid);
     bool participant = false;
@@ -1010,7 +1003,7 @@ void BattleGround::AddPlayer(Player *plr)
     bp.PlayerTeam = team;
 
     // Add to list/maps
-    m_Players[guid.GetRawValue()] = bp;
+    m_Players[guid] = bp;
 
     UpdatePlayersCountByTeam(team, false);                  // +1 player
 
@@ -1053,10 +1046,10 @@ void BattleGround::AddOrSetPlayerToCorrectBgGroup(Player *plr, ObjectGuid plr_gu
 }
 
 // This method should be called when player logs into running battleground
-void BattleGround::EventPlayerLoggedIn(Player* player, uint64 plr_guid)
+void BattleGround::EventPlayerLoggedIn(Player* player, ObjectGuid plr_guid)
 {
     // player is correct pointer
-    for(std::deque<uint64>::iterator itr = m_OfflineQueue.begin(); itr != m_OfflineQueue.end(); ++itr)
+    for(OfflineQueue::iterator itr = m_OfflineQueue.begin(); itr != m_OfflineQueue.end(); ++itr)
     {
         if (*itr == plr_guid)
         {
@@ -1074,12 +1067,12 @@ void BattleGround::EventPlayerLoggedIn(Player* player, uint64 plr_guid)
 void BattleGround::EventPlayerLoggedOut(Player* player)
 {
     // player is correct pointer, it is checked in WorldSession::LogoutPlayer()
-    m_OfflineQueue.push_back(player->GetGUID());
-    m_Players[player->GetGUID()].OfflineRemoveTime = sWorld.GetGameTime() + MAX_OFFLINE_TIME;
+    m_OfflineQueue.push_back(player->GetObjectGuid());
+    m_Players[player->GetObjectGuid()].OfflineRemoveTime = sWorld.GetGameTime() + MAX_OFFLINE_TIME;
     if (GetStatus() == STATUS_IN_PROGRESS)
     {
         // drop flag and handle other cleanups
-        RemovePlayer(player, player->GetGUID());
+        RemovePlayer(player, player->GetObjectGuid());
     }
 }
 
@@ -1128,7 +1121,7 @@ bool BattleGround::HasFreeSlots() const
 void BattleGround::UpdatePlayerScore(Player *Source, uint32 type, uint32 value)
 {
     //this procedure is called from virtual function implemented in bg subclass
-    BattleGroundScoreMap::const_iterator itr = m_PlayerScores.find(Source->GetGUID());
+    BattleGroundScoreMap::const_iterator itr = m_PlayerScores.find(Source->GetObjectGuid());
 
     if(itr == m_PlayerScores.end())                         // player not found...
         return;
@@ -1161,7 +1154,7 @@ bool BattleGround::AddObject(uint32 type, uint32 entry, float x, float y, float 
     // and when loading it (in go::LoadFromDB()), a new guid would be assigned to the object, and a new object would be created
     // so we must create it specific for this instance
     GameObject * go = new GameObject;
-    if(!go->Create(sObjectMgr.GenerateLowGuid(HIGHGUID_GAMEOBJECT),entry, GetBgMap(),
+    if(!go->Create(GetBgMap()->GenerateLocalLowGuid(HIGHGUID_GAMEOBJECT),entry, GetBgMap(),
         x,y,z,o,rotation0,rotation1,rotation2,rotation3,GO_ANIMPROGRESS_DEFAULT,GO_STATE_READY))
     {
         sLog.outErrorDb("Gameobject template %u not found in database! BattleGround not created!", entry);
@@ -1235,7 +1228,7 @@ void BattleGround::DoorOpen(uint64 const& guid)
 
 void BattleGround::OnObjectDBLoad(Creature* creature)
 {
-    const BattleGroundEventIdx eventId = sBattleGroundMgr.GetCreatureEventIndex(creature->GetDBTableGUIDLow());
+    const BattleGroundEventIdx eventId = sBattleGroundMgr.GetCreatureEventIndex(creature->GetGUIDLow());
     if (eventId.event1 == BG_EVENT_NONE)
         return;
     m_EventObjects[MAKE_PAIR32(eventId.event1, eventId.event2)].creatures.push_back(creature->GetGUID());
@@ -1253,7 +1246,7 @@ uint64 BattleGround::GetSingleCreatureGuid(uint8 event1, uint8 event2)
 
 void BattleGround::OnObjectDBLoad(GameObject* obj)
 {
-    const BattleGroundEventIdx eventId = sBattleGroundMgr.GetGameObjectEventIndex(obj->GetDBTableGUIDLow());
+    const BattleGroundEventIdx eventId = sBattleGroundMgr.GetGameObjectEventIndex(obj->GetGUIDLow());
     if (eventId.event1 == BG_EVENT_NONE)
         return;
     m_EventObjects[MAKE_PAIR32(eventId.event1, eventId.event2)].gameobjects.push_back(obj->GetGUID());
@@ -1519,7 +1512,7 @@ void BattleGround::HandleKillPlayer( Player *player, Player *killer )
 
 // return the player's team based on battlegroundplayer info
 // used in same faction arena matches mainly
-Team BattleGround::GetPlayerTeam(uint64 guid)
+Team BattleGround::GetPlayerTeam(ObjectGuid guid)
 {
     BattleGroundPlayerMap::const_iterator itr = m_Players.find(guid);
     if (itr != m_Players.end())
@@ -1527,7 +1520,7 @@ Team BattleGround::GetPlayerTeam(uint64 guid)
     return TEAM_NONE;
 }
 
-bool BattleGround::IsPlayerInBattleGround(uint64 guid)
+bool BattleGround::IsPlayerInBattleGround(ObjectGuid guid)
 {
     BattleGroundPlayerMap::const_iterator itr = m_Players.find(guid);
     if (itr != m_Players.end())
