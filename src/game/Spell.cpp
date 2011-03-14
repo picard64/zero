@@ -45,6 +45,7 @@
 #include "BattleGround.h"
 #include "extras/Mod.h"
 #include "Util.h"
+#include "Chat.h"
 
 #define SPELL_CHANNEL_UPDATE_INTERVAL (1 * IN_MILLISECONDS)
 
@@ -866,13 +867,23 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
     unitTarget = unit;
 
     // Reset damage/healing counter
-    m_damage = 0;
-    m_healing = 0;
+    ResetEffectDamageAndHeal();
 
     // Fill base trigger info
     uint32 procAttacker = m_procAttacker;
     uint32 procVictim   = m_procVictim;
     uint32 procEx       = PROC_EX_NONE;
+
+    if (m_spellInfo->speed > 0)
+    {
+        // mark effects that were already handled in Spell::HandleDelayedSpellLaunch on spell launch as processed
+        for (int32 i = 0; i < MAX_EFFECT_INDEX; ++i)
+            if (IsEffectHandledOnDelayedSpellLaunch(m_spellInfo, SpellEffectIndex(i)))
+                mask &= ~(1<<i);
+
+        // maybe used in effects that are handled on hit
+        m_damage += target->damage;
+    }
 
     if (missInfo==SPELL_MISS_NONE)                          // In case spell hit target, do all effect on that target
         DoSpellHitOnUnit(unit, mask);
@@ -909,7 +920,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
     // Do healing and triggers
     if (m_healing)
     {
-        bool crit = real_caster && real_caster->isSpellCrit(unitTarget, m_spellInfo, m_spellSchoolMask);
+        bool crit = real_caster && real_caster->IsSpellCrit(unitTarget, m_spellInfo, m_spellSchoolMask);
         uint32 addhealth = m_healing;
         if (crit)
         {
@@ -949,8 +960,16 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
         // Fill base damage struct (unitTarget - is real spell target)
         SpellNonMeleeDamage damageInfo(caster, unitTarget, m_spellInfo->Id, GetFirstSchoolInMask(m_spellSchoolMask));
 
+        if (m_spellInfo->speed > 0)
+        {
+            damageInfo.damage = m_damage;
+            damageInfo.HitInfo = target->HitInfo;
+        }
         // Add bonuses and fill damageInfo struct
-        caster->CalculateSpellDamage(&damageInfo, m_damage, m_spellInfo, m_attackType);
+        else
+            caster->CalculateSpellDamage(&damageInfo, m_damage, m_spellInfo, m_attackType);
+
+        unitTarget->CalculateAbsorbResistBlock(caster, &damageInfo, m_spellInfo);
 
         caster->DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
 
@@ -1027,6 +1046,8 @@ void Spell::DoSpellHitOnUnit(Unit *unit, const uint32 effectMask)
     {
         if (realCaster)
             realCaster->SendSpellMiss(unit, m_spellInfo->Id, SPELL_MISS_IMMUNE);
+
+        ResetEffectDamageAndHeal();
         return;
     }
 
@@ -1038,6 +1059,7 @@ void Spell::DoSpellHitOnUnit(Unit *unit, const uint32 effectMask)
             unit->GetCharmerOrOwnerGuid() != m_caster->GetObjectGuid())
         {
             realCaster->SendSpellMiss(unit, m_spellInfo->Id, SPELL_MISS_EVADE);
+            ResetEffectDamageAndHeal();
             return;
         }
 
@@ -1048,6 +1070,7 @@ void Spell::DoSpellHitOnUnit(Unit *unit, const uint32 effectMask)
                 !unit->isVisibleForOrDetect(m_caster, m_caster, false))
             {
                 realCaster->SendSpellMiss(unit, m_spellInfo->Id, SPELL_MISS_EVADE);
+                ResetEffectDamageAndHeal();
                 return;
             }
 
@@ -1086,6 +1109,7 @@ void Spell::DoSpellHitOnUnit(Unit *unit, const uint32 effectMask)
             if (m_spellInfo->speed > 0.0f && !IsPositiveSpell(m_spellInfo->Id))
             {
                 realCaster->SendSpellMiss(unit, m_spellInfo->Id, SPELL_MISS_EVADE);
+                ResetEffectDamageAndHeal();
                 return;
             }
 
@@ -1167,6 +1191,79 @@ void Spell::DoAllEffectOnTarget(ItemTargetInfo *target)
     for(int effectNumber = 0; effectNumber < MAX_EFFECT_INDEX; ++effectNumber)
         if (effectMask & (1 << effectNumber))
             HandleEffects(NULL, target->item, NULL, SpellEffectIndex(effectNumber));
+}
+
+void Spell::HandleDelayedSpellLaunch(TargetInfo *target)
+{
+     // Get mask of effects for target
+    uint32 mask = target->effectMask;
+
+    Unit* unit = m_caster->GetObjectGuid() == target->targetGUID ? m_caster : ObjectAccessor::GetUnit(*m_caster, target->targetGUID);
+    if (!unit)
+        return;
+
+    // Get original caster (if exist) and calculate damage/healing from him data
+    Unit *real_caster = GetAffectiveCaster();
+    // FIXME: in case wild GO heal/damage spells will be used target bonuses
+    Unit *caster = real_caster ? real_caster : m_caster;
+
+    SpellMissInfo missInfo = target->missCondition;
+    // Need init unitTarget by default unit (can changed in code on reflect)
+    // Or on missInfo!=SPELL_MISS_NONE unitTarget undefined (but need in trigger subsystem)
+    unitTarget = unit;
+
+    // Reset damage/healing counter
+    m_damage = 0;
+    m_healing = 0; // healing maybe not needed at this point
+
+    // Fill base damage struct (unitTarget - is real spell target)
+    SpellNonMeleeDamage damageInfo(caster, unitTarget, m_spellInfo->Id, GetFirstSchoolInMask(m_spellSchoolMask));
+
+    if (missInfo == SPELL_MISS_NONE)
+    {
+        for (int32 effectNumber = 0; effectNumber < MAX_EFFECT_INDEX; ++effectNumber)
+        {
+            if (mask & (1 << effectNumber) && IsEffectHandledOnDelayedSpellLaunch(m_spellInfo, SpellEffectIndex(effectNumber)))
+            {
+                HandleEffects(unit, NULL, NULL, SpellEffectIndex(effectNumber), m_damageMultipliers[effectNumber]);
+                if ( m_applyMultiplierMask & (1 << effectNumber) )
+                {
+                    // Get multiplier
+                    float multiplier = m_spellInfo->DmgMultiplier[effectNumber];
+                    // Apply multiplier mods
+                    if (real_caster)
+                        if(Player* modOwner = real_caster->GetSpellModOwner())
+                            modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_EFFECT_PAST_FIRST, multiplier, this);
+                    m_damageMultipliers[effectNumber] *= multiplier;
+                }
+            }
+        }
+
+        if (m_damage > 0)
+            caster->CalculateSpellDamage(&damageInfo, m_damage, m_spellInfo, m_attackType);
+    }
+
+    target->damage = damageInfo.damage;
+    target->HitInfo = damageInfo.HitInfo;
+}
+
+void Spell::InitializeDamageMultipliers()
+{
+    for (int32 i = 0; i < MAX_EFFECT_INDEX; ++i)
+    {
+        if (m_spellInfo->Effect[i] == 0)
+            continue;
+
+        uint32 EffectChainTarget = m_spellInfo->EffectChainTarget[i];
+        if (Unit* realCaster = GetAffectiveCaster())
+            if(Player* modOwner = realCaster->GetSpellModOwner())
+                modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_JUMP_TARGETS, EffectChainTarget, this);
+
+        m_damageMultipliers[i] = 1.0f;
+        if( (m_spellInfo->EffectImplicitTargetA[i] == TARGET_CHAIN_DAMAGE || m_spellInfo->EffectImplicitTargetA[i] == TARGET_CHAIN_HEAL) &&
+            (EffectChainTarget > 1) )
+            m_applyMultiplierMask |= (1 << i);
+    }
 }
 
 bool Spell::IsAliveUnitPresentInTargetList()
@@ -1304,7 +1401,6 @@ void Spell::SetTargetMap(SpellEffectIndex effIndex, uint32 targetMode, UnitList&
         case TARGET_TOTEM_AIR:
         case TARGET_TOTEM_FIRE:
         case TARGET_SELF:
-        case TARGET_AREAEFFECT_CUSTOM_2:
             targetUnitMap.push_back(m_caster);
             break;
         case TARGET_RANDOM_ENEMY_CHAIN_IN_AREA:
@@ -1509,11 +1605,47 @@ void Spell::SetTargetMap(SpellEffectIndex effIndex, uint32 targetMode, UnitList&
         case TARGET_AREAEFFECT_INSTANT:
         {
             SpellTargets targetB = SPELL_TARGETS_AOE_DAMAGE;
+
             // Select friendly targets for positive effect
             if (IsPositiveEffect(m_spellInfo->Id, effIndex))
                 targetB = SPELL_TARGETS_FRIENDLY;
 
-            FillAreaTargets(targetUnitMap, m_caster->GetPositionX(), m_caster->GetPositionY(), radius, PUSH_DEST_CENTER, targetB);
+            UnitList tempTargetUnitMap;
+            SpellScriptTargetBounds bounds = sSpellMgr.GetSpellScriptTargetBounds(m_spellInfo->Id);
+
+            // fill real target list if no spell script target defined
+            FillAreaTargets(bounds.first != bounds.second ? tempTargetUnitMap : targetUnitMap,
+                m_caster->GetPositionX(), m_caster->GetPositionY(), radius, PUSH_DEST_CENTER, bounds.first != bounds.second ? SPELL_TARGETS_ALL : targetB);
+
+            if (!tempTargetUnitMap.empty())
+            {
+                for (UnitList::const_iterator iter = tempTargetUnitMap.begin(); iter != tempTargetUnitMap.end(); ++iter)
+                {
+                    if ((*iter)->GetTypeId() != TYPEID_UNIT)
+                        continue;
+
+                    for(SpellScriptTarget::const_iterator i_spellST = bounds.first; i_spellST != bounds.second; ++i_spellST)
+                    {
+                        // only creature entries supported for this target type
+                        if (i_spellST->second.type == SPELL_TARGET_TYPE_GAMEOBJECT)
+                            continue;
+
+                        if ((*iter)->GetEntry() == i_spellST->second.targetEntry)
+                        {
+                            if (i_spellST->second.type == SPELL_TARGET_TYPE_DEAD && ((Creature*)(*iter))->IsCorpse())
+                            {
+                                targetUnitMap.push_back((*iter));
+                            }
+                            else if (i_spellST->second.type == SPELL_TARGET_TYPE_CREATURE && (*iter)->isAlive())
+                            {
+                                targetUnitMap.push_back((*iter));
+                            }
+
+                            break;
+                        }
+                    }
+                }
+            }
 
             // exclude caster
             targetUnitMap.remove(m_caster);
@@ -1566,6 +1698,37 @@ void Spell::SetTargetMap(SpellEffectIndex effIndex, uint32 targetMode, UnitList&
                         ++itr;
                 }
             }
+            break;
+        }
+        case TARGET_AREAEFFECT_GO_AROUND_DEST:
+        {
+            // It may be possible to fill targets for some spell effects
+            // automatically (SPELL_EFFECT_WMO_REPAIR(88) for example) but
+            // for some/most spells we clearly need/want to limit with spell_target_script
+
+            // Some spells untested, for affected GO type 33. May need further adjustments for spells related.
+
+            SpellScriptTargetBounds bounds = sSpellMgr.GetSpellScriptTargetBounds(m_spellInfo->Id);
+
+            std::list<GameObject*> tempTargetGOList;
+
+            for(SpellScriptTarget::const_iterator i_spellST = bounds.first; i_spellST != bounds.second; ++i_spellST)
+            {
+                if (i_spellST->second.type == SPELL_TARGET_TYPE_GAMEOBJECT)
+                {
+                    // search all GO's with entry, within range of m_destN
+                    MaNGOS::GameObjectEntryInPosRangeCheck go_check(*m_caster, i_spellST->second.targetEntry, m_targets.m_destX, m_targets.m_destY, m_targets.m_destZ, radius);
+                    MaNGOS::GameObjectListSearcher<MaNGOS::GameObjectEntryInPosRangeCheck> checker(tempTargetGOList, go_check);
+                    Cell::VisitGridObjects(m_caster, checker, radius);
+                }
+            }
+
+            if (!tempTargetGOList.empty())
+            {
+                for(std::list<GameObject*>::iterator iter = tempTargetGOList.begin(); iter != tempTargetGOList.end(); ++iter)
+                    AddGOTarget(*iter, effIndex);
+            }
+
             break;
         }
         case TARGET_ALL_ENEMY_IN_AREA_INSTANT:
@@ -2063,6 +2226,10 @@ void Spell::SetTargetMap(SpellEffectIndex effIndex, uint32 targetMode, UnitList&
                 case SPELL_EFFECT_SKILL:
                     targetUnitMap.push_back(m_caster);
                     break;
+                case SPELL_EFFECT_PERSISTENT_AREA_AURA:
+                    if(Unit* currentTarget = m_targets.getUnitTarget())
+                        m_targets.setDestination(currentTarget->GetPositionX(), currentTarget->GetPositionY(), currentTarget->GetPositionZ());
+                    break;
                 case SPELL_EFFECT_LEARN_PET_SPELL:
                     if (Pet* pet = m_caster->GetPet())
                         targetUnitMap.push_back(pet);
@@ -2402,6 +2569,8 @@ void Spell::cast(bool skipCheck)
     SendCastResult(castResult);
     SendSpellGo();                                          // we must send smsg_spell_go packet before m_castItem delete in TakeCastItem()...
 
+    InitializeDamageMultipliers();
+
     // Okay, everything is prepared. Now we need to distinguish between immediate and evented delayed spells
     if (m_spellInfo->speed > 0.0f)
     {
@@ -2409,6 +2578,10 @@ void Spell::cast(bool skipCheck)
         // Remove used for cast item if need (it can be already NULL after TakeReagents call
         // in case delayed spell remove item at cast delay start
         TakeCastItem();
+
+        // fill initial spell damage from caster for delayed casted spells
+        for(std::list<TargetInfo>::iterator ihit = m_UniqueTargetInfo.begin(); ihit != m_UniqueTargetInfo.end(); ++ihit)
+            HandleDelayedSpellLaunch(&(*ihit));
 
         // Okay, maps created, now prepare flags
         m_immediateHandled = false;
@@ -2532,17 +2705,6 @@ void Spell::_handle_immediate_phase()
         // Don't do spell log, if is school damage spell
         if(m_spellInfo->Effect[j] == SPELL_EFFECT_SCHOOL_DAMAGE || m_spellInfo->Effect[j] == 0)
             m_needSpellLog = false;
-
-        uint32 EffectChainTarget = m_spellInfo->EffectChainTarget[j];
-        if (Unit* realCaster = GetAffectiveCaster())
-            if(Player* modOwner = realCaster->GetSpellModOwner())
-                modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_JUMP_TARGETS, EffectChainTarget, this);
-
-        // initialize multipliers
-        m_damageMultipliers[j] = 1.0f;
-        if( (m_spellInfo->EffectImplicitTargetA[j] == TARGET_CHAIN_DAMAGE || m_spellInfo->EffectImplicitTargetA[j] == TARGET_CHAIN_HEAL) &&
-            (EffectChainTarget > 1) )
-            m_applyMultiplierMask |= (1 << j);
     }
 
     // initialize Diminishing Returns Data
@@ -3963,7 +4125,15 @@ SpellCastResult Spell::CheckCast(bool strict)
 
                 Player* plrCaster = (Player*)caster;
 
-                if(plrCaster->getClass() != CLASS_HUNTER)
+                bool gmmode = m_triggeredBySpellInfo == NULL;
+
+                if (gmmode && !ChatHandler(plrCaster).FindCommand("npc tame"))
+                {
+                    plrCaster->SendPetTameFailure(PETTAME_UNKNOWNERROR);
+                    return SPELL_FAILED_DONT_REPORT;
+                }
+
+                if(plrCaster->getClass() != CLASS_HUNTER && !gmmode)
                 {
                     plrCaster->SendPetTameFailure(PETTAME_UNITSCANTTAME);
                     return SPELL_FAILED_DONT_REPORT;
@@ -3977,7 +4147,7 @@ SpellCastResult Spell::CheckCast(bool strict)
                     return SPELL_FAILED_DONT_REPORT;
                 }
 
-                if (target->getLevel() > plrCaster->getLevel())
+                if (target->getLevel() > plrCaster->getLevel() && !gmmode)
                 {
                     plrCaster->SendPetTameFailure(PETTAME_TOOHIGHLEVEL);
                     return SPELL_FAILED_DONT_REPORT;
@@ -5331,6 +5501,8 @@ bool Spell::CheckTarget( Unit* target, SpellEffectIndex eff )
             target->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) &&
             m_spellInfo->EffectImplicitTargetA[eff] != TARGET_SCRIPT &&
             m_spellInfo->EffectImplicitTargetB[eff] != TARGET_SCRIPT &&
+            m_spellInfo->EffectImplicitTargetA[eff] != TARGET_AREAEFFECT_INSTANT &&
+            m_spellInfo->EffectImplicitTargetB[eff] != TARGET_AREAEFFECT_INSTANT &&
             m_spellInfo->EffectImplicitTargetA[eff] != TARGET_AREAEFFECT_CUSTOM &&
             m_spellInfo->EffectImplicitTargetB[eff] != TARGET_AREAEFFECT_CUSTOM )
             return false;
@@ -5729,4 +5901,10 @@ void Spell::CancelGlobalCooldown()
         m_caster->GetCharmInfo()->GetGlobalCooldownMgr().CancelGlobalCooldown(m_spellInfo);
     else if (m_caster->GetTypeId() == TYPEID_PLAYER)
         ((Player*)m_caster)->GetGlobalCooldownMgr().CancelGlobalCooldown(m_spellInfo);
+}
+
+void Spell::ResetEffectDamageAndHeal()
+{
+    m_damage = 0;
+    m_healing = 0;
 }

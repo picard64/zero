@@ -1744,7 +1744,7 @@ bool ChatHandler::HandleLearnAllCommand(char* /*args*/)
             continue;
         }
 
-        m_session->GetPlayer()->learnSpell(spell,false);
+        m_session->GetPlayer()->learnSpell(spell, false);
     }
 
     SendSysMessage(LANG_COMMAND_LEARN_MANY_SPELLS);
@@ -1784,7 +1784,7 @@ bool ChatHandler::HandleLearnAllGMCommand(char* /*args*/)
             continue;
         }
 
-        m_session->GetPlayer()->learnSpell(spell,false);
+        m_session->GetPlayer()->learnSpell(spell, false);
     }
 
     SendSysMessage(LANG_LEARNING_GM_SKILLS);
@@ -1892,7 +1892,7 @@ bool ChatHandler::HandleLearnAllLangCommand(char* /*args*/)
 {
     // skipping UNIVERSAL language (0)
     for(int i = 1; i < LANGUAGES_COUNT; ++i)
-        m_session->GetPlayer()->learnSpell(lang_description[i].spell_id,false);
+        m_session->GetPlayer()->learnSpell(lang_description[i].spell_id, false);
 
     SendSysMessage(LANG_COMMAND_LEARN_ALL_LANG);
     return true;
@@ -3304,7 +3304,7 @@ bool ChatHandler::HandleDamageCommand(char* args)
         uint32 absorb = 0;
         uint32 resist = 0;
 
-        m_session->GetPlayer()->CalcAbsorbResist(target,schoolmask, SPELL_DIRECT_DAMAGE, damage, &absorb, &resist);
+        target->CalculateAbsorbAndResist(m_session->GetPlayer(),schoolmask, SPELL_DIRECT_DAMAGE, damage, &absorb, &resist);
 
         if (damage <= absorb + resist)
             return true;

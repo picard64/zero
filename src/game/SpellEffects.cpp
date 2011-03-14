@@ -273,7 +273,7 @@ void Spell::EffectEnvironmentalDMG(SpellEffectIndex eff_idx)
     // currently each enemy selected explicitly and self cast damage, we prevent apply self casted spell bonuses/etc
     damage = m_spellInfo->CalculateSimpleValue(eff_idx);
 
-    m_caster->CalcAbsorbResist(m_caster, GetSpellSchoolMask(m_spellInfo), SPELL_DIRECT_DAMAGE, damage, &absorb, &resist);
+    m_caster->CalculateAbsorbAndResist(m_caster, GetSpellSchoolMask(m_spellInfo), SPELL_DIRECT_DAMAGE, damage, &absorb, &resist);
 
     m_caster->SendSpellNonMeleeDamageLog(m_caster, m_spellInfo->Id, damage, GetSpellSchoolMask(m_spellInfo), absorb, resist, false, 0, false);
     if(m_caster->GetTypeId() == TYPEID_PLAYER)
@@ -921,7 +921,8 @@ void Spell::EffectDummy(SpellEffectIndex eff_idx)
                 if (Player* modOwner = m_caster->GetSpellModOwner())
                     modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_COST, cost,this);
 
-                int32 dmg = m_caster->SpellDamageBonus(m_caster, m_spellInfo,uint32(cost > 0 ? cost : 0), SPELL_DIRECT_DAMAGE);
+                int32 dmg = m_caster->SpellDamageBonusDone(m_caster, m_spellInfo, uint32(cost > 0 ? cost : 0), SPELL_DIRECT_DAMAGE);
+                dmg = m_caster->SpellDamageBonusTaken(m_caster, m_spellInfo, dmg, SPELL_DIRECT_DAMAGE);
 
                 if (int32(m_caster->GetHealth()) > dmg)
                 {
@@ -1375,7 +1376,7 @@ void Spell::EffectTriggerMissileSpell(SpellEffectIndex effect_idx)
     }
 
     if (m_CastItem)
-        DEBUG_LOG("WORLD: cast Item spellId - %i", spellInfo->Id);
+        DEBUG_FILTER_LOG(LOG_FILTER_SPELL_CAST, "WORLD: cast Item spellId - %i", spellInfo->Id);
 
     m_caster->CastSpell(m_targets.m_destX, m_targets.m_destY, m_targets.m_destZ, spellInfo, true, m_CastItem, 0, m_originalCasterGUID);
 }
@@ -1561,7 +1562,7 @@ void Spell::EffectApplyAura(SpellEffectIndex eff_idx)
             return;
     }
 
-    DEBUG_LOG("Spell: Aura is: %u", m_spellInfo->EffectApplyAuraName[eff_idx]);
+    DEBUG_FILTER_LOG(LOG_FILTER_SPELL_CAST, "Spell: Aura is: %u", m_spellInfo->EffectApplyAuraName[eff_idx]);
 
     Aura* Aur = CreateAura(m_spellInfo, eff_idx, &m_currentBasePoints[eff_idx], unitTarget, caster, m_CastItem);
 
@@ -1605,7 +1606,8 @@ void Spell::EffectPowerDrain(SpellEffectIndex eff_idx)
     int32 curPower = unitTarget->GetPower(drain_power);
 
     //add spell damage bonus
-    damage = m_caster->SpellDamageBonus(unitTarget,m_spellInfo,uint32(damage),SPELL_DIRECT_DAMAGE);
+    damage = m_caster->SpellDamageBonusDone(unitTarget,m_spellInfo,uint32(damage),SPELL_DIRECT_DAMAGE);
+    damage = unitTarget->SpellDamageBonusTaken(m_caster, m_spellInfo, uint32(damage),SPELL_DIRECT_DAMAGE);
 
     int32 new_damage;
     if(curPower < damage)
@@ -1713,14 +1715,14 @@ void Spell::EffectHeal(SpellEffectIndex /*eff_idx*/)
                 idx++;
             }
 
-            int32 tickheal = caster->SpellHealingBonus(unitTarget, targetAura->GetSpellProto(), targetAura->GetModifier()->m_amount, DOT);
-            int32 tickcount = GetSpellDuration(targetAura->GetSpellProto()) / targetAura->GetSpellProto()->EffectAmplitude[idx];
-            unitTarget->RemoveAurasDueToSpell(targetAura->GetId());
+            int32 tickheal = targetAura->GetModifier()->m_amount;
+            int32 tickcount = GetSpellDuration(targetAura->GetSpellProto()) / targetAura->GetSpellProto()->EffectAmplitude[idx] - 1;
 
             addhealth += tickheal * tickcount;
         }
-        else
-            addhealth = caster->SpellHealingBonus(unitTarget, m_spellInfo, addhealth, HEAL);
+
+        addhealth = caster->SpellHealingBonusDone(unitTarget, m_spellInfo, addhealth, HEAL);
+        addhealth = unitTarget->SpellHealingBonusTaken(caster, m_spellInfo, addhealth, HEAL);
 
         m_healing += addhealth;
     }
@@ -1736,7 +1738,9 @@ void Spell::EffectHealMechanical(SpellEffectIndex /*eff_idx*/)
         if (!caster)
             return;
 
-        uint32 addhealth = caster->SpellHealingBonus(unitTarget, m_spellInfo, uint32(damage), HEAL);
+        uint32 addhealth = caster->SpellHealingBonusDone(unitTarget, m_spellInfo, damage, HEAL);
+        addhealth = unitTarget->SpellHealingBonusTaken(caster, m_spellInfo, addhealth, HEAL);
+
         caster->DealHeal(unitTarget, addhealth, m_spellInfo);
     }
 }
@@ -1766,7 +1770,8 @@ void Spell::EffectHealthLeech(SpellEffectIndex eff_idx)
     uint32 heal = uint32(damage*multiplier);
     if (m_caster->isAlive())
     {
-        heal = m_caster->SpellHealingBonus(m_caster, m_spellInfo, heal, HEAL);
+        heal = m_caster->SpellHealingBonusTaken(m_caster, m_spellInfo, heal, HEAL);
+
         m_caster->DealHeal(m_caster, heal, m_spellInfo);
     }
 }
@@ -2281,6 +2286,21 @@ void Spell::EffectSummon(SpellEffectIndex eff_idx)
         return;
     }
 
+    // Summon in dest location
+    float x, y, z;
+    if (m_targets.m_targetMask & TARGET_FLAG_DEST_LOCATION)
+    {
+        x = m_targets.m_destX;
+        y = m_targets.m_destY;
+        z = m_targets.m_destZ;
+    }
+    else
+        // FIXME: Setup near to finish point because GetObjectBoundingRadius set in Create but some Create calls can be dependent from proper position
+        // if totem have creature_template_addon.auras with persistent point for example or script call
+        m_caster->GetClosePoint(x, y, z, 0);
+
+    spawnCreature->Relocate(x, y, z, -m_caster->GetOrientation());
+
     Map *map = m_caster->GetMap();
     uint32 pet_number = sObjectMgr.GeneratePetNumber();
     if (!spawnCreature->Create(map->GenerateLocalLowGuid(HIGHGUID_PET), map,
@@ -2291,18 +2311,12 @@ void Spell::EffectSummon(SpellEffectIndex eff_idx)
         return;
     }
 
-    // Summon in dest location
-    float x, y, z;
-    if (m_targets.m_targetMask & TARGET_FLAG_DEST_LOCATION)
+    if (!(m_targets.m_targetMask & TARGET_FLAG_DEST_LOCATION))
     {
-        x = m_targets.m_destX;
-        y = m_targets.m_destY;
-        z = m_targets.m_destZ;
-    }
-    else
         m_caster->GetClosePoint(x, y, z, spawnCreature->GetObjectBoundingRadius());
+        spawnCreature->Relocate(x, y, z, -m_caster->GetOrientation());
+    }
 
-    spawnCreature->Relocate(x, y, z, -m_caster->GetOrientation());
     spawnCreature->SetSummonPoint(x, y, z, -m_caster->GetOrientation());
 
     if (!spawnCreature->IsPositionValid())
@@ -2724,16 +2738,6 @@ void Spell::EffectSummonGuardian(SpellEffectIndex eff_idx)
     {
         Pet* spawnCreature = new Pet(GUARDIAN_PET);
 
-        Map *map = m_caster->GetMap();
-        uint32 pet_number = sObjectMgr.GeneratePetNumber();
-        if (!spawnCreature->Create(map->GenerateLocalLowGuid(HIGHGUID_PET), map,
-            m_spellInfo->EffectMiscValue[eff_idx], pet_number))
-        {
-            sLog.outError("no such creature entry %u", m_spellInfo->EffectMiscValue[eff_idx]);
-            delete spawnCreature;
-            return;
-        }
-
         float px, py, pz;
         // If dest location if present
         if (m_targets.m_targetMask & TARGET_FLAG_DEST_LOCATION)
@@ -2751,9 +2755,29 @@ void Spell::EffectSummonGuardian(SpellEffectIndex eff_idx)
         }
         // Summon if dest location not present near caster
         else
-            m_caster->GetClosePoint(px, py, pz,spawnCreature->GetObjectBoundingRadius());
+            // FIXME: Setup near to finish point because GetObjectBoundingRadius set in Create but some Create calls can be dependent from proper position
+            // if totem have creature_template_addon.auras with persistent point for example or script call
+            m_caster->GetClosePoint(px, py, pz, 0);
 
         spawnCreature->Relocate(px, py, pz, m_caster->GetOrientation());
+
+        Map *map = m_caster->GetMap();
+        uint32 pet_number = sObjectMgr.GeneratePetNumber();
+        if (!spawnCreature->Create(map->GenerateLocalLowGuid(HIGHGUID_PET), map,
+            m_spellInfo->EffectMiscValue[eff_idx], pet_number))
+        {
+            sLog.outError("no such creature entry %u", m_spellInfo->EffectMiscValue[eff_idx]);
+            delete spawnCreature;
+            return;
+        }
+
+        // Summon if dest location not present near caster
+        if (!(m_targets.m_targetMask & TARGET_FLAG_DEST_LOCATION))
+        {
+            m_caster->GetClosePoint(px, py, pz,spawnCreature->GetObjectBoundingRadius());
+            spawnCreature->Relocate(px, py, pz, m_caster->GetOrientation());
+        }
+
         spawnCreature->SetSummonPoint(px, py, pz, m_caster->GetOrientation());
 
         if (!spawnCreature->IsPositionValid())
@@ -2823,7 +2847,7 @@ void Spell::EffectAddHonor(SpellEffectIndex /*eff_idx*/)
     // honor-spells don't scale with level and won't be casted by an item
     // also we must use damage (spelldescription says +25 honor but damage is only 24)
     ((Player*)unitTarget)->AddHonorCP(float(damage),HONORABLE,0,0);
-    DEBUG_LOG("SpellEffect::AddHonor (spell_id %u) rewards %u honor points (non scale) for player: %u", m_spellInfo->Id, damage, ((Player*)unitTarget)->GetGUIDLow());
+    DEBUG_FILTER_LOG(LOG_FILTER_SPELL_CAST, "SpellEffect::AddHonor (spell_id %u) rewards %u honor points (non scale) for player: %u", m_spellInfo->Id, damage, ((Player*)unitTarget)->GetGUIDLow());
 }
 
 void Spell::EffectTradeSkill(SpellEffectIndex /*eff_idx*/)
@@ -2960,7 +2984,7 @@ void Spell::EffectEnchantItemTmp(SpellEffectIndex eff_idx)
     uint32 duration;
 
     // rogue family enchantments exception by duration
-    if(m_spellInfo->Id == 38615)
+    if(m_spellInfo->Id == 38615)                            // Poison
         duration = 1800;                                    // 30 mins
     // other rogue family enchantments always 1 hour (some have spell damage=0, but some have wrong data in EffBasePoints)
     else if(m_spellInfo->SpellFamilyName == SPELLFAMILY_ROGUE)
@@ -2977,9 +3001,9 @@ void Spell::EffectEnchantItemTmp(SpellEffectIndex eff_idx)
     // shaman rockbiter enchantments
     else if(m_spellInfo->SpellVisual==0)
         duration = 1800;                                    // 30 mins
-    else if(m_spellInfo->Id == 29702)
+    else if(m_spellInfo->Id == 29702)                       // Greater Ward of Shielding
         duration = 300;                                     // 5 mins
-    else if(m_spellInfo->Id == 37360)
+    else if(m_spellInfo->Id == 37360)                       // Consecrated Weapon
         duration = 300;                                     // 5 mins
     // default case
     else
@@ -3019,9 +3043,36 @@ void Spell::EffectTameCreature(SpellEffectIndex /*eff_idx*/)
     //SendChannelUpdate(0);
     finish();
 
-    Pet* pet = plr->CreateTamedPetFrom(creatureTarget, m_spellInfo->Id);
-    if(!pet)                                                // in versy specific state like near world end/etc.
+    Pet* pet = new Pet(HUNTER_PET);
+
+    if(!pet->CreateBaseAtCreature(creatureTarget))
+    {
+        delete pet;
         return;
+    }
+
+    pet->SetOwnerGuid(plr->GetObjectGuid());
+    pet->SetCreatorGuid(plr->GetObjectGuid());
+    pet->setFaction(plr->getFaction());
+    pet->SetUInt32Value(UNIT_CREATED_BY_SPELL, m_spellInfo->Id);
+
+    pet->SetUInt32Value(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP_ATTACKABLE);
+
+    if (plr->IsPvP())
+        pet->SetPvP(true);
+
+    if (!pet->InitStatsForLevel(creatureTarget->getLevel()))
+    {
+        sLog.outError("Pet::InitStatsForLevel() failed for creature (Entry: %u)!",creatureTarget->GetEntry());
+        delete pet;
+        return;
+    }
+
+    pet->GetCharmInfo()->SetPetNumber(sObjectMgr.GeneratePetNumber(), true);
+    // this enables pet details window (Shift+P)
+    pet->AIM_Initialize();
+    pet->InitPetCreateSpells();
+    pet->SetHealth(pet->GetMaxHealth());
 
     // "kill" original creature
     creatureTarget->ForcedDespawn();
@@ -3118,6 +3169,14 @@ void Spell::EffectSummonPet(SpellEffectIndex eff_idx)
         return;
     }
 
+    // FIXME: Setup near to finish point because GetObjectBoundingRadius set in Create but some Create calls can be dependent from proper position
+    // if totem have creature_template_addon.auras with persistent point for example or script call
+    float px, py, pz;
+    m_caster->GetClosePoint(px, py, pz, 0);
+
+    NewSummon->Relocate(px, py, pz, m_caster->GetOrientation());
+
+
     Map *map = m_caster->GetMap();
     uint32 pet_number = sObjectMgr.GeneratePetNumber();
     if(!NewSummon->Create(map->GenerateLocalLowGuid(HIGHGUID_PET), map,
@@ -3127,7 +3186,6 @@ void Spell::EffectSummonPet(SpellEffectIndex eff_idx)
         return;
     }
 
-    float px, py, pz;
     m_caster->GetClosePoint(px, py, pz, NewSummon->GetObjectBoundingRadius());
 
     NewSummon->Relocate(px, py, pz, m_caster->GetOrientation());
@@ -3309,8 +3367,8 @@ void Spell::EffectWeaponDmg(SpellEffectIndex eff_idx)
             // Seal of Command - receive benefit from Spell Damage and Healing
             if(m_spellInfo->SpellFamilyFlags & UI64LIT(0x00000002000000))
             {
-                spell_bonus += int32(0.20f*m_caster->SpellBaseDamageBonus(GetSpellSchoolMask(m_spellInfo)));
-                spell_bonus += int32(0.29f*m_caster->SpellBaseDamageBonusForVictim(GetSpellSchoolMask(m_spellInfo), unitTarget));
+                spell_bonus += int32(0.20f*m_caster->SpellBaseDamageBonusDone(GetSpellSchoolMask(m_spellInfo)));
+                spell_bonus += int32(0.29f*unitTarget->SpellBaseDamageBonusTaken(GetSpellSchoolMask(m_spellInfo)));
             }
             break;
         }
@@ -3638,6 +3696,29 @@ void Spell::EffectScriptEffect(SpellEffectIndex eff_idx)
 
                     // Ghost Costume (male or female)
                     m_caster->CastSpell(unitTarget, unitTarget->getGender() == GENDER_MALE ? 24735 : 24736, true);
+                    return;
+                }
+                case 24751:                                 // Trick or Treat
+                {
+                    if (!unitTarget || unitTarget->GetTypeId() != TYPEID_PLAYER)
+                        return;
+
+                    // Tricked or Treated
+                    unitTarget->CastSpell(unitTarget, 24755, true);
+
+                    if (roll_chance_i(50))
+                    {
+                        // Treat
+                        unitTarget->CastSpell(unitTarget, 24715, true);
+                    }
+                    else
+                    {
+                        if (roll_chance_i(14))              // Trick (can be different critter models). 14% since below can have 1 of 6
+                            unitTarget->CastSpell(unitTarget, 24753, true);
+                        else                                // Random Costume, 6 different (plus add. for gender)
+                            unitTarget->CastSpell(unitTarget, 24720, true);
+                    }
+
                     return;
                 }
                 case 26275:                                 // PX-238 Winter Wondervolt TRAP
@@ -4100,6 +4181,19 @@ void Spell::EffectSummonTotem(SpellEffectIndex eff_idx)
 
     Totem* pTotem = new Totem;
 
+    // FIXME: Setup near to finish point because GetObjectBoundingRadius set in Create but some Create calls can be dependent from proper position
+    // if totem have creature_template_addon.auras with persistent point for example or script call
+    float angle = slot < MAX_TOTEM_SLOT ? M_PI_F/MAX_TOTEM_SLOT - (slot*2*M_PI_F/MAX_TOTEM_SLOT) : 0;
+
+    float x, y, z;
+    m_caster->GetClosePoint(x, y, z, 0, 2.0f, angle);
+
+    // totem must be at same Z in case swimming caster and etc.
+    if (fabs( z - m_caster->GetPositionZ() ) > 5)
+        z = m_caster->GetPositionZ();
+
+    pTotem->Relocate(x, y, z, m_caster->GetOrientation());
+
     if (!pTotem->Create(m_caster->GetMap()->GenerateLocalLowGuid(HIGHGUID_UNIT), m_caster->GetMap(),
         m_spellInfo->EffectMiscValue[eff_idx], team))
     {
@@ -4107,9 +4201,6 @@ void Spell::EffectSummonTotem(SpellEffectIndex eff_idx)
         return;
     }
 
-    float angle = slot < MAX_TOTEM_SLOT ? M_PI_F/MAX_TOTEM_SLOT - (slot*2*M_PI_F/MAX_TOTEM_SLOT) : 0;
-
-    float x, y, z;
     m_caster->GetClosePoint(x, y, z, pTotem->GetObjectBoundingRadius(), 2.0f, angle);
 
     // totem must be at same Z in case swimming caster and etc.
@@ -4566,6 +4657,21 @@ void Spell::EffectSummonCritter(SpellEffectIndex eff_idx)
     // summon new pet
     Pet* critter = new Pet(MINI_PET);
 
+    float x, y, z;
+    // If dest location if present
+    if (m_targets.m_targetMask & TARGET_FLAG_DEST_LOCATION)
+    {
+        x = m_targets.m_destX;
+        y = m_targets.m_destY;
+        z = m_targets.m_destZ;
+    }
+    else
+        // FIXME: Setup near to finish point because GetObjectBoundingRadius set in Create but some Create calls can be dependent from proper position
+        // if pet have creature_template_addon.auras with persistent point for example or script call
+        m_caster->GetClosePoint(x, y, z, 0);
+
+    critter->Relocate(x, y, z, m_caster->GetOrientation());
+
     Map *map = m_caster->GetMap();
     uint32 pet_number = sObjectMgr.GeneratePetNumber();
     if(!critter->Create(map->GenerateLocalLowGuid(HIGHGUID_PET),
@@ -4576,19 +4682,12 @@ void Spell::EffectSummonCritter(SpellEffectIndex eff_idx)
         return;
     }
 
-    float x, y, z;
-    // If dest location if present
-    if (m_targets.m_targetMask & TARGET_FLAG_DEST_LOCATION)
+    // Summon if dest location not present near caster
+    if (!(m_targets.m_targetMask & TARGET_FLAG_DEST_LOCATION))
     {
-        x = m_targets.m_destX;
-        y = m_targets.m_destY;
-        z = m_targets.m_destZ;
-     }
-     // Summon if dest location not present near caster
-     else
         m_caster->GetClosePoint(x, y, z, critter->GetObjectBoundingRadius());
-
-    critter->Relocate(x, y, z, m_caster->GetOrientation());
+        critter->Relocate(x, y, z, m_caster->GetOrientation());
+    }
     critter->SetSummonPoint(x, y, z, m_caster->GetOrientation());
 
     if(!critter->IsPositionValid())

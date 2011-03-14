@@ -68,19 +68,18 @@ bool LoginQueryHolder::Initialize()
 
     // NOTE: all fields in `characters` must be read to prevent lost character data at next save in case wrong DB structure.
     // !!! NOTE: including unused `zone`,`online`
-    res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADFROM,            "SELECT guid, account, data, name, race, class, gender, level, xp, money, playerBytes, playerBytes2, playerFlags,"
+    res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADFROM,            "SELECT guid, account, name, race, class, gender, level, xp, money, playerBytes, playerBytes2, playerFlags,"
         "position_x, position_y, position_z, map, orientation, taximask, cinematic, totaltime, leveltime, rest_bonus, logout_time, is_logout_resting, resettalents_cost,"
         "resettalents_time, trans_x, trans_y, trans_z, trans_o, transguid, extra_flags, stable_slots, at_login, zone, online, death_expire_time, taxi_path,"
         "honor_highest_rank, honor_standing, stored_honor_rating, stored_dishonorable_kills, stored_honorable_kills,"
         "watchedFaction, drunk,"
-        "health, power1, power2, power3, power4, power5 FROM characters WHERE guid = '%u'", GUID_LOPART(m_guid));
+        "health, power1, power2, power3, power4, power5, exploredZones, equipmentCache, ammoId, actionBars FROM characters WHERE guid = '%u'", GUID_LOPART(m_guid));
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADGROUP,           "SELECT groupId FROM group_member WHERE memberGuid ='%u'", GUID_LOPART(m_guid));
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADBOUNDINSTANCES,  "SELECT id, permanent, map, resettime FROM character_instance LEFT JOIN instance ON instance = id WHERE guid = '%u'", GUID_LOPART(m_guid));
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADAURAS,           "SELECT caster_guid,item_guid,spell,effect_index,stackcount,amount,maxduration,remaintime,remaincharges FROM character_aura WHERE guid = '%u'", GUID_LOPART(m_guid));
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADSPELLS,          "SELECT spell,active,disabled FROM character_spell WHERE guid = '%u'", GUID_LOPART(m_guid));
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADQUESTSTATUS,     "SELECT quest,status,rewarded,explored,timer,mobcount1,mobcount2,mobcount3,mobcount4,itemcount1,itemcount2,itemcount3,itemcount4 FROM character_queststatus WHERE guid = '%u'", GUID_LOPART(m_guid));
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADHONORCP,         "SELECT victim_type,victim,honor,date,type FROM character_honor_cp WHERE guid = '%u'", GUID_LOPART(m_guid));
-    res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADTUTORIALS,       "SELECT tut0,tut1,tut2,tut3,tut4,tut5,tut6,tut7 FROM character_tutorial WHERE account = '%u' AND realmid = '%u'", GetAccountId(), realmID);
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADREPUTATION,      "SELECT faction,standing,flags FROM character_reputation WHERE guid = '%u'", GUID_LOPART(m_guid));
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADINVENTORY,       "SELECT data,bag,slot,item,item_template FROM character_inventory JOIN item_instance ON character_inventory.item = item_instance.guid WHERE character_inventory.guid = '%u' ORDER BY bag,slot", GUID_LOPART(m_guid));
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADITEMLOOT,        "SELECT guid,itemid,amount,property FROM item_loot WHERE owner_guid = '%u'", GUID_LOPART(m_guid));
@@ -162,7 +161,7 @@ void WorldSession::HandleCharEnumOpcode( WorldPacket & /*recv_data*/ )
     //   8                9               10                     11                     12                     13                    14
         "characters.zone, characters.map, characters.position_x, characters.position_y, characters.position_z, guild_member.guildid, characters.playerFlags, "
     //  15                    16                   17                     18                   19
-        "characters.at_login, character_pet.entry, character_pet.modelid, character_pet.level, characters.data "
+        "characters.at_login, character_pet.entry, character_pet.modelid, character_pet.level, characters.equipmentCache "
         "FROM characters LEFT JOIN character_pet ON characters.guid=character_pet.owner AND character_pet.slot='%u' "
         "LEFT JOIN guild_member ON characters.guid = guild_member.guid "
         "WHERE characters.account = '%u' ORDER BY characters.guid",
@@ -679,23 +678,23 @@ void WorldSession::HandleTutorialFlagOpcode( WorldPacket & recv_data )
     }
     uint32 rInt = (iFlag % 32);
 
-    uint32 tutflag = GetPlayer()->GetTutorialInt( wInt );
+    uint32 tutflag = GetTutorialInt( wInt );
     tutflag |= (1 << rInt);
-    GetPlayer()->SetTutorialInt( wInt, tutflag );
+    SetTutorialInt( wInt, tutflag );
 
     //DEBUG_LOG("Received Tutorial Flag Set {%u}.", iFlag);
 }
 
 void WorldSession::HandleTutorialClearOpcode( WorldPacket & /*recv_data*/ )
 {
-    for (int i = 0; i < 8; ++i)
-        GetPlayer()->SetTutorialInt( i, 0xFFFFFFFF );
+    for ( uint32 iI = 0; iI < 8; ++iI)
+        SetTutorialInt( iI, 0xFFFFFFFF );
 }
 
 void WorldSession::HandleTutorialResetOpcode( WorldPacket & /*recv_data*/ )
 {
-    for (int i = 0; i < 8; ++i)
-        GetPlayer()->SetTutorialInt( i, 0x00000000 );
+    for ( uint32 iI = 0; iI < 8; iI++)
+        SetTutorialInt( iI, 0x00000000 );
 }
 
 void WorldSession::HandleSetWatchedFactionOpcode(WorldPacket & recv_data)

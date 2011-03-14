@@ -661,7 +661,6 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOADSPELLS,
     PLAYER_LOGIN_QUERY_LOADQUESTSTATUS,
     PLAYER_LOGIN_QUERY_LOADHONORCP,
-    PLAYER_LOGIN_QUERY_LOADTUTORIALS,                       // common for all characters for some account at specific realm
     PLAYER_LOGIN_QUERY_LOADREPUTATION,
     PLAYER_LOGIN_QUERY_LOADINVENTORY,
     PLAYER_LOGIN_QUERY_LOADITEMLOOT,
@@ -1073,6 +1072,7 @@ class MANGOS_DLL_SPEC Player : public Unit
         void AddItemToBuyBackSlot( Item *pItem );
         Item* GetItemFromBuyBackSlot( uint32 slot );
         void RemoveItemFromBuyBackSlot( uint32 slot, bool del );
+
         uint32 GetMaxKeyringSize() const { return KEYRING_SLOT_END-KEYRING_SLOT_START; }
         void SendEquipError( uint8 msg, Item* pItem, Item *pItem2 = NULL, uint32 itemid = 0 ) const;
         void SendBuyError( uint8 msg, Creature* pCreature, uint32 item, uint32 param );
@@ -1238,11 +1238,6 @@ class MANGOS_DLL_SPEC Player : public Unit
 
         bool LoadFromDB(uint32 guid, SqlQueryHolder *holder);
 
-        static bool   LoadValuesArrayFromDB(Tokens& data,uint64 guid);
-        static uint32 GetUInt32ValueFromArray(Tokens const& data, uint16 index);
-        static float  GetFloatValueFromArray(Tokens const& data, uint16 index);
-        static uint32 GetUInt32ValueFromDB(uint16 index, uint64 guid);
-        static float  GetFloatValueFromDB(uint16 index, uint64 guid);
         static uint32 GetZoneIdFromDB(ObjectGuid guid);
         static uint32 GetLevelFromDB(ObjectGuid guid);
         static bool   LoadPositionFromDB(ObjectGuid guid, uint32& mapid, float& x,float& y,float& z,float& o, bool& in_flight);
@@ -1254,12 +1249,8 @@ class MANGOS_DLL_SPEC Player : public Unit
         void SaveToDB();
         void SaveInventoryAndGoldToDB();                    // fast save function for item/money cheating preventing
         void SaveGoldToDB();
-        void SaveDataFieldToDB();
-        static bool SaveValuesArrayInDB(Tokens const& data,uint64 guid);
         static void SetUInt32ValueInArray(Tokens& data,uint16 index, uint32 value);
         static void SetFloatValueInArray(Tokens& data,uint16 index, float value);
-        static void SetUInt32ValueInDB(uint16 index, uint32 value, uint64 guid);
-        static void SetFloatValueInDB(uint16 index, float value, uint64 guid);
         static void SavePositionInDB(ObjectGuid guid, uint32 mapid, float x,float y,float z,float o,uint32 zone);
 
         static void DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRealmChars = true, bool deleteFinally = false);
@@ -1293,22 +1284,6 @@ class MANGOS_DLL_SPEC Player : public Unit
         {
             SetUInt32Value (PLAYER_FIELD_COINAGE, value);
             MoneyChanged( value );
-        }
-
-        uint32 GetTutorialInt(uint32 intId )
-        {
-            MANGOS_ASSERT( (intId < 8) );
-            return m_Tutorials[intId];
-        }
-
-        void SetTutorialInt(uint32 intId, uint32 value)
-        {
-            MANGOS_ASSERT( (intId < 8) );
-            if(m_Tutorials[intId]!=value)
-            {
-                m_Tutorials[intId] = value;
-                m_TutorialsChanged = true;
-            }
         }
 
         QuestStatusMap& getQuestStatusMap() { return mQuestStatus; };
@@ -2108,10 +2083,10 @@ class MANGOS_DLL_SPEC Player : public Unit
         void _LoadGroup(QueryResult *result);
         void _LoadSkills(QueryResult *result);
         void _LoadSpells(QueryResult *result);
-        void _LoadTutorials(QueryResult *result);
         void _LoadFriendList(QueryResult *result);
         bool _LoadHomeBind(QueryResult *result);
         void _LoadBGData(QueryResult* result);
+        void _LoadIntoDataField(const char* data, uint32 startOffset, uint32 count);
 
         /*********************************************************/
         /***                   SAVE SYSTEM                     ***/
@@ -2125,7 +2100,6 @@ class MANGOS_DLL_SPEC Player : public Unit
         void _SaveQuestStatus();
         void _SaveSkills();
         void _SaveSpells();
-        void _SaveTutorials();
         void _SaveBGData();
         void _SaveStats();
 
@@ -2211,9 +2185,6 @@ class MANGOS_DLL_SPEC Player : public Unit
         int m_cinematic;
 
         TradeData* m_trade;
-
-        uint32 m_Tutorials[8];
-        bool   m_TutorialsChanged;
 
         uint32 m_drunkTimer;
         uint16 m_drunk;

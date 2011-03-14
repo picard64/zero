@@ -24,7 +24,7 @@ DROP TABLE IF EXISTS `db_version`;
 CREATE TABLE `db_version` (
   `version` varchar(120) default NULL,
   `creature_ai_version` varchar(120) default NULL,
-  `required_z1385_s0842_02_mangos_command` bit(1) default NULL
+  `required_z1442_s0923_01_mangos_spell_affect` bit(1) default NULL
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8 ROW_FORMAT=FIXED COMMENT='Used DB version notes';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -479,6 +479,7 @@ INSERT INTO `command` VALUES
 ('debug play sound',1,'Syntax: .debug play sound #soundid\r\n\r\nPlay sound with #soundid.\r\nSound will be play only for you. Other players do not hear this.\r\nWarning: client may have more 5000 sounds...'),
 ('debug setitemvalue',3,'Syntax: .debug setitemvalue #guid #field [int|hex|bit|float] #value\r\n\r\nSet the field #field of the item #itemguid in your inventroy to value #value.\r\n\r\nUse type arg for set input format: int (decimal number), hex (hex value), bit (bitstring), float. By default expect integer input format.'),
 ('debug setvalue',3,'Syntax: .debug setvalue #field [int|hex|bit|float] #value\r\n\r\nSet the field #field of the selected target to value #value. If no target is selected, set the content of your field.\r\n\r\nUse type arg for set input format: int (decimal number), hex (hex value), bit (bitstring), float. By default expect integer input format.'),
+('debug spellcoefs',3,'Syntax: .debug spellcoefs #spellid\r\n\r\nShow default calculated and DB stored coefficients for direct/dot heal/damage.'),
 ('debug spellmods',3,'Syntax: .debug spellmods (flat|pct) #spellMaskBitIndex #spellModOp #value\r\n\r\nSet at client side spellmod affect for spell that have bit set with index #spellMaskBitIndex in spell family mask for values dependent from spellmod #spellModOp to #value.'),
 ('delticket',2,'Syntax: .delticket all\r\n        .delticket #num\r\n        .delticket $character_name\r\n\rall to dalete all tickets at server, $character_name to delete ticket of this character, #num to delete ticket #num.'),
 ('demorph',2,'Syntax: .demorph\r\n\r\nDemorph the selected player.'),
@@ -3691,6 +3692,11 @@ INSERT INTO `mangos_string` VALUES
 (1168,'Scripting library reloaded.',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
 (1169,'Scripting library build for different mangosd revision.',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
 (1200,'You try to view cinemitic %u but it doesn\'t exist.',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+(1202,'Spell %u %s = %f (*1.88 = %f) DB = %f AP = %f',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+(1203,'direct heal',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+(1204,'direct damage',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+(1205,'dot heal',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+(1206,'dot damage',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
 (1400,'Private ',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
 (1401,'Corporal ',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
 (1402,'Sergeant ',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
@@ -9336,7 +9342,6 @@ CREATE TABLE `pool_creature` (
   PRIMARY KEY  (`guid`),
   INDEX `pool_idx` (pool_entry)
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8;
-/*!40101 SET character_set_client = @saved_cs_client */;
 
 --
 -- Dumping data for table `pool_creature`
@@ -9345,6 +9350,29 @@ CREATE TABLE `pool_creature` (
 LOCK TABLES `pool_creature` WRITE;
 /*!40000 ALTER TABLE `pool_creature` DISABLE KEYS */;
 /*!40000 ALTER TABLE `pool_creature` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `pool_creature_template`
+--
+
+DROP TABLE IF EXISTS `pool_creature_template`;
+CREATE TABLE `pool_creature_template` (
+  `id` int(10) unsigned NOT NULL default '0',
+  `pool_entry` mediumint(8) unsigned NOT NULL default '0',
+  `chance` float unsigned NOT NULL default '0',
+  `description` varchar(255) NOT NULL,
+  PRIMARY KEY  (`id`),
+  INDEX `pool_idx` (pool_entry)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+--
+-- Dumping data for table `pool_creature_template`
+--
+
+LOCK TABLES `pool_creature_template` WRITE;
+/*!40000 ALTER TABLE `pool_creature_template` DISABLE KEYS */;
+/*!40000 ALTER TABLE `pool_creature_template` ENABLE KEYS */;
 UNLOCK TABLES;
 
 --
@@ -9371,6 +9399,29 @@ CREATE TABLE `pool_gameobject` (
 LOCK TABLES `pool_gameobject` WRITE;
 /*!40000 ALTER TABLE `pool_gameobject` DISABLE KEYS */;
 /*!40000 ALTER TABLE `pool_gameobject` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `pool_gameobject_template`
+--
+
+DROP TABLE IF EXISTS `pool_gameobject_template`;
+CREATE TABLE `pool_gameobject_template` (
+  `id` int(10) unsigned NOT NULL default '0',
+  `pool_entry` mediumint(8) unsigned NOT NULL default '0',
+  `chance` float unsigned NOT NULL default '0',
+  `description` varchar(255) NOT NULL,
+  PRIMARY KEY  (`id`),
+  INDEX `pool_idx` (pool_entry)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+--
+-- Dumping data for table `pool_gameobject_template`
+--
+
+LOCK TABLES `pool_gameobject_template` WRITE;
+/*!40000 ALTER TABLE `pool_gameobject_template` DISABLE KEYS */;
+/*!40000 ALTER TABLE `pool_gameobject_template` ENABLE KEYS */;
 UNLOCK TABLES;
 
 --
@@ -9912,40 +9963,45 @@ CREATE TABLE `spell_affect` (
 LOCK TABLES `spell_affect` WRITE;
 /*!40000 ALTER TABLE `spell_affect` DISABLE KEYS */;
 INSERT INTO `spell_affect` VALUES
-(11083,0,12714007),
-(11115,0,146931735),
-(11124,0,146931735),
-(11242,0,4096),
-(11247,0,8192),
-(11367,0,146931735),
-(11368,0,146931735),
-(11369,0,146931735),
-(11370,0,146931735),
-(12042,0,551557879),
-(12042,1,551557879),
-(12042,2,551557879),
-(12285,0,1),
-(12288,0,8),
-(12288,1,8),
-(12301,0,256),
-(12351,0,12714007),
-(12378,0,146931735),
-(12398,0,146931735),
-(12399,0,146931735),
-(12400,0,146931735),
-(12467,0,4096),
-(12469,0,4096),
-(12536,0,549460727),
-(12593,1,551557879),
-(12697,0,1),
-(12707,0,8),
-(12707,1,8),
-(12818,0,256),
-(12842,0,2359296),
-(13742,0,96),
-(13743,0,64),
-(13872,0,96),
-(13875,0,64),
+(11083,0,0x0000000000C20017),
+(11115,0,0x0000000008C20017),
+(11124,0,0x0000000008C20017),
+(11170,0,0x0000000040FE1AF7),
+(11242,0,0x0000000000001000),
+(11247,0,0x0000000000002000),
+(11367,0,0x0000000008C20017),
+(11368,0,0x0000000008C20017),
+(11369,0,0x0000000008C20017),
+(11370,0,0x0000000008C20017),
+(12042,0,0x0000000020E01AF7),
+(12042,1,0x0000000020E01AF7),
+(12042,2,0x0000000020E01AF7),
+(12285,0,0x0000000000000001),
+(12288,0,0x0000000000000008),
+(12288,1,0x0000000000000008),
+(12301,0,0x0000000000000100),
+(12351,0,0x0000000000C20017),
+(12378,0,0x0000000008C20017),
+(12398,0,0x0000000008C20017),
+(12399,0,0x0000000008C20017),
+(12400,0,0x0000000008C20017),
+(12467,0,0x0000000000001000),
+(12469,0,0x0000000000001000),
+(12536,0,0x0000000020C01AF7),
+(12593,1,0x0000000020E01AF7),
+(12697,0,0x0000000000000001),
+(12707,0,0x0000000000000008),
+(12707,1,0x0000000000000008),
+(12818,0,0x0000000000000100),
+(12842,0,0x0000000000240000),
+(12982,0,0x0000000040FE1AF7),
+(12983,0,0x0000000040FE1AF7),
+(12984,0,0x0000000040FE1AF7),
+(12985,0,0x0000000040FE1AF7),
+(13742,0,0x0000000000000060),
+(13743,0,0x0000000000000040),
+(13872,0,0x0000000000000060),
+(13875,0,0x0000000000000040),
 (13975,1,4194304),
 (13976,0,1792),
 (13979,0,1792),
@@ -10206,12 +10262,9 @@ INSERT INTO `spell_bonus_data` VALUES
 (5570,  0,      0.127,   0,     'Druid - Insect Swarm'),
 (8921,  0.1515, 0.13,    0,     'Druid - Moonfire'),
 (8936,  0.3,    0.1,     0,     'Druid - Regrowth'),
-(774,   0,      0.37604, 0,     'Druid - Rejuvenation'),
-(2912,  1,      0,       0,     'Druid - Starfire'),
 (18562, 0,      0,       0,     'Druid - Swiftmend'),
 (5176,  0.5714, 0,       0,     'Druid - Wrath'),
 /* Mage */
-(1449,  0.2128, 0,       0,     'Mage - Arcane Explosion'),
 (7268,  0.2857, 0,       0,     'Mage - Arcane Missiles Triggered Spell Rank 1'),
 (7269,  0.2857, 0,       0,     'Mage - Arcane Missiles Triggered Spell Rank 2'),
 (7270,  0.2857, 0,       0,     'Mage - Arcane Missiles Triggered Spell Rank 3'),
@@ -10222,26 +10275,13 @@ INSERT INTO `spell_bonus_data` VALUES
 (25346, 0.2857, 0,       0,     'Mage - Arcane Missiles Triggered Spell Rank 8'),
 (11113, 0.1357, 0,       0,     'Mage - Blast Wave Rank'),
 (120,   0.1357, 0,       0,     'Mage - Cone of Cold'),
-(2136,  0.4286, 0,       0,     'Mage - Fire Blast'),
 (133,   1,      0,       0,     'Mage - Fire Ball'),
 (2120,  0.2357, 0.122,   0,     'Mage - Flamestrike'),
-(122,   0.193,  0,       0,     'Mage - Frost Nova'),
 (116,   0.8143, 0,       0,     'Mage - Frost Bolt'),
-(11426, 0.8053, 0,       0,     'Mage - Ice Barrier'),
 (1463,  0.8053, 0,       0,     'Mage - Mana Shield'),
-(11366, 1.15,   0.05,    0,     'Mage - Pyroblast'),
-(2948,  0.4286, 0,       0,     'Mage - Scorch'),
 /* Paladin */
 (26573, 0,      0.04,    0.04,  'Paladin - Consecration'),
 (879,   0.15,   0,       0.15,  'Paladin - Exorcism'),
-(19750, 0.4286, 0,       0,     'Paladin - Flash of Light'),
-(635,   0.7143, 0,       0,     'Paladin - Holy Light'),
-(25912, 0.4286, 0,       0,     'Paladin - Holy Shock Triggered Hurt Rank 1'),
-(25911, 0.4286, 0,       0,     'Paladin - Holy Shock Triggered Hurt Rank 2'),
-(25902, 0.4286, 0,       0,     'Paladin - Holy Shock Triggered Hurt Rank 3'),
-(25914, 0.4286, 0,       0,     'Paladin - Holy Shock Triggered Heal Rank 1'),
-(25913, 0.4286, 0,       0,     'Paladin - Holy Shock Triggered Heal Rank 2'),
-(25903, 0.4286, 0,       0,     'Paladin - Holy Shock Triggered Heal Rank 3'),
 (24275, 0.15,   0,       0.15,  'Paladin - Hammer of Wrath'),
 (20925, 0.09,   0,       0.056, 'Paladin - Holy Shield'),
 (2812,  0.07,   0,       0.07,  'Paladin - Holy Wrath'),
@@ -10249,8 +10289,6 @@ INSERT INTO `spell_bonus_data` VALUES
 (20167, 0.25,   0,       0.16,  'Paladin - Seal of Light Proc'),
 (25742, 0.07,   0,       0.039, 'Paladin - Seal of Righteousness Dummy Proc'),
 /* Priest */
-(13908, 0.4286, 0,       0,     'Priest - Desperate Prayer'),
-(2944,  0.1849, 0,       0,     'Priest - Devouring Plague'),
 (2061,  0.6177, 0,       0,     'Priest - Flash Heal'),
 (2060,  1.2353, 0,       0,     'Priest - Greater Heal'),
 (14914, 0.5711, 0.024,   0,     'Priest - Holy Fire'),
@@ -10262,15 +10300,9 @@ INSERT INTO `spell_bonus_data` VALUES
 (27804, 0.3035, 0,       0,     'Priest - Holy Nova Heal Rank 5'),
 (27805, 0.3035, 0,       0,     'Priest - Holy Nova Heal Rank 6'),
 (8129,  0,      0,       0,     'Priest - Mana Burn'),
-(8092,  0.4296, 0,       0,     'Priest - Mind Blast'),
 (15407, 0,      0.19,    0,     'Priest - Mind Flay'),
-(17,    0.8068, 0,       0,     'Priest - Power Word: Shield'),
-(596,   0.4285, 0,       0,     'Priest - Prayer of Healing'),
-(139,   0,      0.2,     0,     'Priest - Renew'),
-(589,   0,      0.1829,  0,     'Priest - Shadow Word: Pain'),
 (585,   0.714,  0,       0,     'Priest - Smite'),
 /* Shaman */
-(1064,  1.34,   0,       0,     'Shaman - Chain Heal'),
 (421,   0.57,   0,       0,     'Shaman - Chain Lightning'),
 (974,   0.2857, 0,       0,     'Shaman - Earth Shield'),
 (379,   0,      0,       0,     'Shaman - Earth Shield Triggered'),
@@ -10291,7 +10323,6 @@ INSERT INTO `spell_bonus_data` VALUES
 (8034,  0.1,    0,       0,     'Shaman - Frostbrand Attack Rank 1'),
 (5672,  0,      0.0450,  0,     'Shaman - Healing Stream Totem'),
 (331,   0.8571, 0,       0,     'Shaman - Healing Wave'),
-(8004,  0.4286, 0,       0,     'Shaman - Lesser Healing Wave'),
 (403,   0.7143, 0,       0,     'Shaman - Lightning Bolt'),
 (26364, 0.33,   0,       0,     'Shaman - Lightning Shield Proc Rank 1'),
 (26365, 0.33,   0,       0,     'Shaman - Lightning Shield Proc Rank 2'),
@@ -10311,13 +10342,10 @@ INSERT INTO `spell_bonus_data` VALUES
 (10435, 0.1667, 0,       0,     'Shaman - Searing Totem Attack Rank 5'),
 (10436, 0.1667, 0,       0,     'Shaman - Searing Totem Attack Rank 6'),
 /* Warlock */
-(17962, 0.4286, 0,       0,     'Warlock - Conflagrate'),
 (172,   0,      0.156,   0,     'Warlock - Corruption'),
 (980,   0,      0.1,     0,     'Warlock - Curse of Agony'),
 (603,   0,      2,       0,     'Warlock - Curse of Doom'),
 (18220, 0.96,   0,       0,     'Warlock - Dark Pact'),
-(6789,  0.22,   0,       0,     'Warlock - Death Coil'),
-(689,   0,      0.1428,  0,     'Warlock - Drain Life'),
 (5138,  0,      0,       0,     'Warlock - Drain Mana'),
 (1120,  0,      0.4286,  0,     'Warlock - Drain Soul'),
 (18790, 0,      0,       0,     'Warlock - Fel Stamina'),
@@ -10328,11 +10356,8 @@ INSERT INTO `spell_bonus_data` VALUES
 (11682, 0.1428, 0,       0,     'Warlock - Hellfire Effect on Enemy Rank 3'),
 (348,   0.2,    0.2,     0,     'Warlock - Immolate'),
 (1454,  0.8,    0,       0,     'Warlock - Life Tap'),
-(5676,  0.4286, 0,       0,     'Warlock - Searing Pain'),
 (686,   0.8571, 0,       0,     'Warlock - Shadow Bolt'),
 (6229,  0.3,    0,       0,     'Warlock - Shadow Ward'),
-(17877, 0.4286, 0,       0,     'Warlock - Shadowburn'),
-(18265, 0,      0.1,     0,     'Warlock - Siphon Life'),
 (6353,  1.15,   0,       0,     'Warlock - Soul Fire'),
 /* Item */
 (18764, 0,      0,       0,     'Item - Fungal Regrowth'),

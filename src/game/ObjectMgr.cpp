@@ -591,7 +591,7 @@ void ObjectMgr::LoadCreatureTemplates()
 
 void ObjectMgr::ConvertCreatureAddonAuras(CreatureDataAddon* addon, char const* table, char const* guidEntryStr)
 {
-    // Now add the auras, format "spellid effectindex spellid effectindex..."
+    // Now add the auras, format "spell1 spell2 ..."
     char *p,*s;
     std::vector<int> val;
     s=p=(char*)reinterpret_cast<char const*>(addon->auras);
@@ -611,14 +611,6 @@ void ObjectMgr::ConvertCreatureAddonAuras(CreatureDataAddon* addon, char const* 
 
         // free char* loaded memory
         delete[] (char*)reinterpret_cast<char const*>(addon->auras);
-
-        // wrong list
-        if (val.size()%2)
-        {
-            addon->auras = NULL;
-            sLog.outErrorDb("Creature (%s: %u) has wrong `auras` data in `%s`.",guidEntryStr,addon->guidOrEntry,table);
-            return;
-        }
     }
 
     // empty list
@@ -629,19 +621,14 @@ void ObjectMgr::ConvertCreatureAddonAuras(CreatureDataAddon* addon, char const* 
     }
 
     // replace by new structures array
-    const_cast<CreatureDataAddonAura*&>(addon->auras) = new CreatureDataAddonAura[val.size()/2+1];
+    const_cast<CreatureDataAddonAura*&>(addon->auras) = new CreatureDataAddonAura[val.size()+1];
 
-    uint32 i=0;
-    for(uint32 j = 0; j < val.size()/2; ++j)
+    uint32 i = 0;
+    for(uint32 j = 0; j < val.size(); ++j)
     {
         CreatureDataAddonAura& cAura = const_cast<CreatureDataAddonAura&>(addon->auras[i]);
-        cAura.spell_id = uint32(val[2*j+0]);
-        cAura.effect_idx  = SpellEffectIndex(val[2*j+1]);
-        if (cAura.effect_idx >= MAX_EFFECT_INDEX)
-        {
-            sLog.outErrorDb("Creature (%s: %u) has wrong effect %u for spell %u in `auras` field in `%s`.",guidEntryStr,addon->guidOrEntry,cAura.effect_idx,cAura.spell_id,table);
-            continue;
-        }
+        cAura.spell_id = uint32(val[j]);
+
         SpellEntry const *AdditionalSpellInfo = sSpellStore.LookupEntry(cAura.spell_id);
         if (!AdditionalSpellInfo)
         {
@@ -649,9 +636,9 @@ void ObjectMgr::ConvertCreatureAddonAuras(CreatureDataAddon* addon, char const* 
             continue;
         }
 
-        if (!AdditionalSpellInfo->Effect[cAura.effect_idx] || !AdditionalSpellInfo->EffectApplyAuraName[cAura.effect_idx])
+        if (!IsSpellAppliesAura(AdditionalSpellInfo))
         {
-            sLog.outErrorDb("Creature (%s: %u) has not aura effect %u of spell %u defined in `auras` field in `%s`.",guidEntryStr,addon->guidOrEntry,cAura.effect_idx,cAura.spell_id,table);
+            sLog.outErrorDb("Creature (%s: %u) has spell %u defined in `auras` field in `%s` but spell doesn't apply any auras.", guidEntryStr, addon->guidOrEntry, cAura.spell_id, table);
             continue;
         }
 
@@ -660,8 +647,7 @@ void ObjectMgr::ConvertCreatureAddonAuras(CreatureDataAddon* addon, char const* 
 
     // fill terminator element (after last added)
     CreatureDataAddonAura& endAura = const_cast<CreatureDataAddonAura&>(addon->auras[i]);
-    endAura.spell_id   = 0;
-    endAura.effect_idx = EFFECT_INDEX_0;
+    endAura.spell_id = 0;
 }
 
 void ObjectMgr::LoadCreatureAddons(SQLStorage& creatureaddons, char const* entryName, char const* comment)
@@ -879,14 +865,18 @@ void ObjectMgr::LoadCreatureModelInfo()
 void ObjectMgr::LoadCreatures()
 {
     uint32 count = 0;
-    //                                                0              1   2    3
-    QueryResult *result = WorldDatabase.Query("SELECT creature.guid, id, map, modelid,"
+    //                                                0                       1   2    3
+    QueryResult *result = WorldDatabase.Query("SELECT creature.guid, creature.id, map, modelid,"
     //   4             5           6           7           8            9              10         11
         "equipment_id, position_x, position_y, position_z, orientation, spawntimesecs, spawndist, currentwaypoint,"
-    //   12         13       14          15            16         17
-        "curhealth, curmana, DeathState, MovementType, event, pool_entry "
-        "FROM creature LEFT OUTER JOIN game_event_creature ON creature.guid = game_event_creature.guid "
-        "LEFT OUTER JOIN pool_creature ON creature.guid = pool_creature.guid");
+    //   12         13       14          15            16
+        "curhealth, curmana, DeathState, MovementType, event,"
+    //   17                        18
+        "pool_creature.pool_entry, pool_creature_template.pool_entry "
+        "FROM creature "
+        "LEFT OUTER JOIN game_event_creature ON creature.guid = game_event_creature.guid "
+        "LEFT OUTER JOIN pool_creature ON creature.guid = pool_creature.guid "
+        "LEFT OUTER JOIN pool_creature_template ON creature.id = pool_creature_template.id");
 
     if(!result)
     {
@@ -936,7 +926,8 @@ void ObjectMgr::LoadCreatures()
         data.is_dead            = fields[14].GetBool();
         data.movementType       = fields[15].GetUInt8();
         int16 gameEvent         = fields[16].GetInt16();
-        int16 PoolId            = fields[17].GetInt16();
+        int16 GuidPoolId        = fields[17].GetInt16();
+        int16 EntryPoolId       = fields[18].GetInt16();
 
         MapEntry const* mapEntry = sMapStore.LookupEntry(data.mapid);
         if(!mapEntry)
@@ -1008,7 +999,7 @@ void ObjectMgr::LoadCreatures()
             }
         }
 
-        if (gameEvent==0 && PoolId==0)                      // if not this is to be managed by GameEvent System or Pool system
+        if (gameEvent==0 && GuidPoolId==0 && EntryPoolId==0)// if not this is to be managed by GameEvent System or Pool system
             AddCreatureToGrid(guid, &data);
         ++count;
 
@@ -1042,12 +1033,16 @@ void ObjectMgr::LoadGameobjects()
 {
     uint32 count = 0;
 
-    //                                                0                1   2    3           4           5           6
-    QueryResult *result = WorldDatabase.Query("SELECT gameobject.guid, id, map, position_x, position_y, position_z, orientation,"
-    //   7          8          9          10         11             12            13     14         15
-        "rotation0, rotation1, rotation2, rotation3, spawntimesecs, animprogress, state, event, pool_entry "
-        "FROM gameobject LEFT OUTER JOIN game_event_gameobject ON gameobject.guid = game_event_gameobject.guid "
-        "LEFT OUTER JOIN pool_gameobject ON gameobject.guid = pool_gameobject.guid");
+    //                                                0                           1   2    3           4           5           6
+    QueryResult *result = WorldDatabase.Query("SELECT gameobject.guid, gameobject.id, map, position_x, position_y, position_z, orientation,"
+    //   7          8          9          10         11             12            13     14
+        "rotation0, rotation1, rotation2, rotation3, spawntimesecs, animprogress, state, event,"
+    //   15                          16
+        "pool_gameobject.pool_entry, pool_gameobject_template.pool_entry "
+        "FROM gameobject "
+        "LEFT OUTER JOIN game_event_gameobject ON gameobject.guid = game_event_gameobject.guid "
+        "LEFT OUTER JOIN pool_gameobject ON gameobject.guid = pool_gameobject.guid "
+        "LEFT OUTER JOIN pool_gameobject_template ON gameobject.id = pool_gameobject_template.id");
 
     if(!result)
     {
@@ -1120,7 +1115,8 @@ void ObjectMgr::LoadGameobjects()
         data.go_state       = GOState(go_state);
 
         int16 gameEvent     = fields[14].GetInt16();
-        int16 PoolId        = fields[15].GetInt16();
+        int16 GuidPoolId    = fields[15].GetInt16();
+        int16 EntryPoolId   = fields[16].GetInt16();
 
         if (data.rotation2 < -1.0f || data.rotation2 > 1.0f)
         {
@@ -1140,7 +1136,7 @@ void ObjectMgr::LoadGameobjects()
             continue;
         }
 
-        if (gameEvent == 0 && PoolId == 0)                  // if not this is to be managed by GameEvent System or Pool system
+        if (gameEvent==0 && GuidPoolId==0 && EntryPoolId==0)// if not this is to be managed by GameEvent System or Pool system
             AddGameobjectToGrid(guid, &data);
         ++count;
 
@@ -4067,7 +4063,7 @@ void ObjectMgr::LoadInstanceTemplate()
 
     for(uint32 i = 0; i < sInstanceTemplate.MaxEntry; i++)
     {
-        InstanceTemplate * temp = const_cast<InstanceTemplate*>(GetInstanceTemplate(i));
+        InstanceTemplate const* temp = GetInstanceTemplate(i);
         if (!temp)
             continue;
 
@@ -4094,7 +4090,7 @@ void ObjectMgr::LoadInstanceTemplate()
             {
                 sLog.outErrorDb("ObjectMgr::LoadInstanceTemplate: bad parent map id %u for instance template %d template!",
                     parentEntry->MapID, temp->map);
-                temp->parent = 0;
+                const_cast<InstanceTemplate*>(temp)->parent = 0;
                 continue;
             }
 
@@ -4102,7 +4098,7 @@ void ObjectMgr::LoadInstanceTemplate()
             {
                 sLog.outErrorDb("ObjectMgr::LoadInstanceTemplate: parent point to continent map id %u for instance template %d template, ignored, need be set only for non-continent parents!",
                     parentEntry->MapID,temp->map);
-                temp->parent = 0;
+                const_cast<InstanceTemplate*>(temp)->parent = 0;
                 continue;
             }
         }
@@ -4135,7 +4131,7 @@ void ObjectMgr::LoadInstanceTemplate()
 
         // the reset_delay must be at least one day
         if (temp->reset_delay)
-            temp->reset_delay = std::max((uint32)1, (uint32)(temp->reset_delay * sWorld.getConfig(CONFIG_FLOAT_RATE_INSTANCE_RESET_TIME)));
+            const_cast<InstanceTemplate*>(temp)->reset_delay = std::max((uint32)1, (uint32)(temp->reset_delay * sWorld.getConfig(CONFIG_FLOAT_RATE_INSTANCE_RESET_TIME)));
     }
 
     sLog.outString( ">> Loaded %u Instance Template definitions", sInstanceTemplate.RecordCount );
@@ -5582,8 +5578,12 @@ std::string ObjectMgr::GeneratePetName(uint32 entry)
 void ObjectMgr::LoadCorpses()
 {
     uint32 count = 0;
-    //                                                     0           1           2           3            4    5     6     7            8         10
-    QueryResult *result = CharacterDatabase.Query("SELECT position_x, position_y, position_z, orientation, map, data, time, corpse_type, instance, guid FROM corpse WHERE corpse_type <> 0");
+    //                                                    0            1       2                  3                  4                  5                   6
+    QueryResult *result = CharacterDatabase.Query("SELECT corpse.guid, player, corpse.position_x, corpse.position_y, corpse.position_z, corpse.orientation, corpse.map, "
+    //   7     8            9     10      11    12     13           14            15              16       17
+    "time, corpse_type, instance, gender, race, class, playerBytes, playerBytes2, equipmentCache, guildId, playerFlags FROM corpse "
+    "JOIN characters ON player = characters.guid "
+    "LEFT JOIN guild_member ON player=guild_member.guid WHERE corpse_type <> 0");
 
     if( !result )
     {
@@ -5604,7 +5604,7 @@ void ObjectMgr::LoadCorpses()
 
         Field *fields = result->Fetch();
 
-        uint32 guid = fields[result->GetFieldCount()-1].GetUInt32();
+        uint32 guid = fields[0].GetUInt32();
 
         Corpse *corpse = new Corpse;
         if(!corpse->LoadFromDB(guid,fields))

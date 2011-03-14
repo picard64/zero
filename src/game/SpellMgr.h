@@ -89,6 +89,8 @@ SpellSpecific GetSpellSpecific(uint32 spellId);
 // Different spell properties
 inline float GetSpellRadius(SpellRadiusEntry const *radius) { return (radius ? radius->Radius : 0); }
 uint32 GetSpellCastTime(SpellEntry const* spellInfo, Spell const* spell = NULL);
+uint32 GetSpellCastTimeForBonus( SpellEntry const *spellProto, DamageEffectType damagetype );
+float CalculateDefaultCoefficient(SpellEntry const *spellProto, DamageEffectType const damagetype);
 inline float GetSpellMinRange(SpellRangeEntry const *range) { return (range ? range->minRange : 0); }
 inline float GetSpellMaxRange(SpellRangeEntry const *range) { return (range ? range->maxRange : 0); }
 inline uint32 GetSpellRecoveryTime(SpellEntry const *spellInfo) { return spellInfo->RecoveryTime > spellInfo->CategoryRecoveryTime ? spellInfo->RecoveryTime : spellInfo->CategoryRecoveryTime; }
@@ -121,6 +123,21 @@ inline bool IsSpellAppliesAura(SpellEntry const *spellInfo, uint32 effectMask = 
         }
     }
     return false;
+}
+
+inline bool IsEffectHandledOnDelayedSpellLaunch(SpellEntry const *spellInfo, SpellEffectIndex effecIdx)
+{
+    switch (spellInfo->Effect[effecIdx])
+    {
+        case SPELL_EFFECT_SCHOOL_DAMAGE:
+        case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
+        case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
+        case SPELL_EFFECT_WEAPON_DAMAGE:
+        case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
+            return true;
+        default:
+            return false;
+    }
 }
 
 inline bool IsSpellHaveAura(SpellEntry const *spellInfo, AuraType aura)
@@ -216,7 +233,7 @@ inline bool IsCasterSourceTarget(uint32 target)
         case TARGET_TOTEM_WATER:
         case TARGET_TOTEM_AIR:
         case TARGET_TOTEM_FIRE:
-        case TARGET_AREAEFFECT_CUSTOM_2:
+        case TARGET_AREAEFFECT_GO_AROUND_DEST:
             return true;
         default:
             break;
@@ -294,7 +311,7 @@ inline bool IsAreaEffectTarget( Targets target )
         case TARGET_ALL_PARTY:
         case TARGET_ALL_PARTY_AROUND_CASTER_2:
         case TARGET_AREAEFFECT_PARTY:
-        case TARGET_AREAEFFECT_CUSTOM_2:
+        case TARGET_AREAEFFECT_GO_AROUND_DEST:
         case TARGET_ALL_RAID_AROUND_CASTER:
         case TARGET_AREAEFFECT_PARTY_AND_CLASS:
             return true;
@@ -722,8 +739,10 @@ class SpellMgr
         uint64 GetSpellAffectMask(uint32 spellId, SpellEffectIndex effectId) const
         {
             SpellAffectMap::const_iterator itr = mSpellAffectMap.find((spellId<<8) + effectId);
-            if( itr != mSpellAffectMap.end( ) )
+            if (itr != mSpellAffectMap.end())
                 return itr->second;
+            if (SpellEntry const* spellEntry=sSpellStore.LookupEntry(spellId))
+                return spellEntry->EffectItemType[effectId];
             return 0;
         }
 
