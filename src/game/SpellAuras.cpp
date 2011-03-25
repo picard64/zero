@@ -472,7 +472,7 @@ void Aura::Update(uint32 diff)
             if(Player* modOwner = caster->GetSpellModOwner())
                 modOwner->ApplySpellMod(GetId(), SPELLMOD_RANGE, max_range, NULL);
 
-            if(!caster->IsWithinDistInMap(m_target, max_range))
+            if(!caster->IsWithinDistInMap(m_target, max_range) && !(caster->GetTypeId() == TYPEID_PLAYER))
             {
                 m_target->RemoveAurasByCasterSpell(GetId(), GetEffIndex(), GetCasterGUID());
                 return;
