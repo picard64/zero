@@ -6973,6 +6973,9 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
     PermissionTypes permission = ALL_PERMISSION;
 
     DEBUG_LOG("Player::SendLoot");
+
+    RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
+
     switch(guid.GetHigh())
     {
         case HIGHGUID_GAMEOBJECT:
